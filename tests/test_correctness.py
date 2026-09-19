@@ -19,7 +19,7 @@ import torch
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from pagedattn import LLAMA3_8B, MHA_DEBUG, allocate, cuda_decode, reference  # noqa: E402
+from pagedattn import LLAMA3_8B, MHA_DEBUG, allocate, reference  # noqa: E402
 from pagedattn.cache import gather_contiguous  # noqa: E402
 from pagedattn.triton_decode import paged_decode_triton  # noqa: E402
 
@@ -88,9 +88,6 @@ def test_ragged_batch():
     ref = reference.reference_decode(q, c)
     for ns in (1, 4):
         assert _rel(paged_decode_triton(q, c, num_splits=ns), ref) < REL_TOL
-    if cuda_decode.is_available():
-        for ns in (1, 4):
-            assert _rel(cuda_decode.paged_decode_cuda(q, c, num_splits=ns), ref) < REL_TOL
 
 
 def test_mha_group_one():
@@ -111,51 +108,6 @@ def test_fragmented_vs_sequential_blocks_agree():
         outs.append((paged_decode_triton(q, c), reference.reference_decode(q, c)))
     for got, ref in outs:
         assert _rel(got, ref) < REL_TOL
-
-
-# ---------------------------------------------------------------------------
-# CUDA kernel
-# ---------------------------------------------------------------------------
-
-cuda_only = pytest.mark.skipif(
-    not cuda_decode.is_available(), reason=f"CUDA ext unavailable: {cuda_decode.load_error()}"
-)
-
-
-@cuda_only
-@pytest.mark.parametrize("batch,seqlen", SHAPES)
-@pytest.mark.parametrize("num_splits", [1, 4])
-def test_cuda_matches_reference(batch, seqlen, num_splits):
-    q, c = _qkv(batch, seqlen)
-    ref = reference.reference_decode(q, c)
-    got = cuda_decode.paged_decode_cuda(q, c, num_splits=num_splits)
-    assert _rel(got, ref) < REL_TOL
-
-
-@cuda_only
-@pytest.mark.parametrize("kv_dtype", ["fp16", "fp8_e5m2", "int8"])
-@pytest.mark.parametrize("num_splits", [1, 8])
-def test_cuda_quantized_kv(kv_dtype, num_splits):
-    q, c = _qkv(2, 2048, kv_dtype=kv_dtype)
-    ref = reference.reference_decode(q, c)
-    got = cuda_decode.paged_decode_cuda(q, c, num_splits=num_splits)
-    assert _rel(got, ref) < REL_TOL
-
-
-@cuda_only
-@pytest.mark.parametrize("block_size", [16, 32, 64])
-def test_cuda_page_sizes(block_size):
-    q, c = _qkv(3, 1000, block_size=block_size)
-    ref = reference.reference_decode(q, c)
-    assert _rel(cuda_decode.paged_decode_cuda(q, c), ref) < REL_TOL
-
-
-@cuda_only
-def test_triton_and_cuda_agree():
-    q, c = _qkv(4, 3000)
-    a = paged_decode_triton(q, c, num_splits=4)
-    b = cuda_decode.paged_decode_cuda(q, c, num_splits=4)
-    assert _rel(a, b) < REL_TOL
 
 
 # ---------------------------------------------------------------------------
@@ -220,27 +172,3 @@ def test_triton_other_model_shapes(hq, hkv, d, num_splits):
     ref = reference.reference_decode(q, c)
     got = paged_decode_triton(q, c, num_splits=num_splits)
     assert _rel(got, ref) < REL_TOL
-
-
-@cuda_only
-@pytest.mark.parametrize("hq,hkv,d", OTHER_SHAPES)
-def test_cuda_other_model_shapes(hq, hkv, d):
-    """Instantiated per (head_dim, group): supported pairs must work, and
-    unsupported ones must raise rather than run a wrong specialization."""
-    shape = MHA_DEBUG.__class__(hq, hkv, d, name=f"{hq}x{hkv}x{d}")
-    q, c = _qkv(3, 777, shape=shape, seed=7)
-    ok, _ = cuda_decode.supports_shape(d, hq // hkv)
-    if not ok:
-        with pytest.raises(ValueError):
-            cuda_decode.paged_decode_cuda(q, c)
-        return
-    ref = reference.reference_decode(q, c)
-    assert _rel(cuda_decode.paged_decode_cuda(q, c, num_splits=1), ref) < REL_TOL
-    assert _rel(cuda_decode.paged_decode_cuda(q, c, num_splits=4), ref) < REL_TOL
-
-
-@cuda_only
-def test_cuda_rejects_uncompiled_shape():
-    """head_dim 256 is not instantiated; the error must name the shape."""
-    ok, why = cuda_decode.supports_shape(256, 4)
-    assert not ok and "256" in why and "Triton" in why

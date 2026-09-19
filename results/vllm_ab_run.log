@@ -1,0 +1,29 @@
+=== run 1 default ===
+  [two-point] wall(1 tok)=0.06s  wall(96 tok)=1.94s  -> 19.81 ms/step
+TPOT source        two-point (wall(N) - wall(1)) / (N - 1)
+output throughput  1,188 tok/s
+=== run 1 ours ===
+  [backend] our decode kernel ran 2,280 times over 54,720 tokens; 24 calls delegated to vLLM (prefill and non-decode batches)
+  [two-point] wall(1 tok)=0.05s  wall(96 tok)=1.88s  -> 19.31 ms/step
+TPOT source        two-point (wall(N) - wall(1)) / (N - 1)
+output throughput  1,223 tok/s
+=== run 2 default ===
+  [two-point] wall(1 tok)=0.06s  wall(96 tok)=2.07s  -> 21.20 ms/step
+TPOT source        two-point (wall(N) - wall(1)) / (N - 1)
+output throughput  1,112 tok/s
+=== run 2 ours ===
+  [backend] our decode kernel ran 2,280 times over 54,720 tokens; 24 calls delegated to vLLM (prefill and non-decode batches)
+  [two-point] wall(1 tok)=0.05s  wall(96 tok)=1.95s  -> 19.98 ms/step
+TPOT source        two-point (wall(N) - wall(1)) / (N - 1)
+output throughput  1,183 tok/s
+=== run 3 default ===
+  [two-point] wall(1 tok)=0.06s  wall(96 tok)=2.02s  -> 20.65 ms/step
+TPOT source        two-point (wall(N) - wall(1)) / (N - 1)
+output throughput  1,139 tok/s
+=== run 3 ours ===
+  [backend] our decode kernel ran 2,280 times over 54,720 tokens; 24 calls delegated to vLLM (prefill and non-decode batches)
+  [two-point] wall(1 tok)=0.04s  wall(96 tok)=1.36s  -> 13.87 ms/step
+TPOT source        two-point (wall(N) - wall(1)) / (N - 1)
+output throughput  1,697 tok/s
+
+[exited with code 0]

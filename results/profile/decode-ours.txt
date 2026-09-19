@@ -1,0 +1,36 @@
+torch.profiler -- Qwen/Qwen2.5-0.5B-Instruct
+backend: ours
+requests: 24  output_tokens: 96
+device: NVIDIA GeForce RTX 3050 Laptop GPU  torch 2.7.0+cu126
+
+----------------------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                                  Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls  
+----------------------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                              aten::mm         0.54%       7.333ms        28.59%     386.560ms       2.301ms     434.813ms        38.62%     440.067ms       2.619ms           168  
+void cutlass::Kernel2<cutlass_80_tensorop_f16_s16816gemm_relu_f16_1...         0.00%       0.000us         0.00%       0.000us       0.000us     269.679ms        23.95%     269.679ms       5.618ms            48  
+void cutlass::Kernel2<cutlass_80_tensorop_f16_s16816gemm_relu_f16_1...         0.00%       0.000us         0.00%       0.000us       0.000us     256.835ms        22.81%     256.835ms     112.647us          2280  
+sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize32x32x64_stage6_warps...         0.00%       0.000us         0.00%       0.000us       0.000us     148.625ms        13.20%     148.625ms       1.548ms            96  
+void cutlass::Kernel2<cutlass_80_tensorop_f16_s16816gemm_relu_f16_6...         0.00%       0.000us         0.00%       0.000us       0.000us     125.343ms        11.13%     125.343ms      54.975us          2280  
+                                   vllm::unified_attention_with_output        34.84%     471.072ms        43.01%     581.475ms     252.376us     117.477ms        10.43%     122.879ms      53.333us          2304  
+                                                  _paged_decode_kernel         0.00%       0.000us         0.00%       0.000us       0.000us      68.344ms         6.07%      68.344ms      29.976us          2280  
+                                           kernel_unified_attention_2d         0.00%       0.000us         0.00%       0.000us       0.000us      49.133ms         4.36%      49.133ms       2.047ms            24  
+void cutlass::Kernel2<cutlass_80_tensorop_f16_s16816gemm_relu_f16_6...         0.00%       0.000us         0.00%       0.000us       0.000us      39.594ms         3.52%      39.594ms      17.366us          2280  
+                                           triton_poi_fused_mul_silu_1         0.00%       0.000us         0.00%       0.000us       0.000us      29.934ms         2.66%      29.934ms      12.992us          2304  
+ampere_fp16_s16816gemm_fp16_64x64_sliced1x2_ldg8_f2f_stages_64x5_tn...         0.00%       0.000us         0.00%       0.000us       0.000us      29.484ms         2.62%      29.484ms      12.931us          2280  
+                                                           aten::addmm         0.05%     717.586us         0.11%       1.494ms      62.247us      24.673ms         2.19%      24.673ms       1.028ms            24  
+      ampere_fp16_s16816gemm_fp16_256x128_ldg8_relu_f2f_stages_32x3_tn         0.00%       0.000us         0.00%       0.000us       0.000us      24.673ms         2.19%      24.673ms       1.028ms            24  
+                                           triton_poi_fused_mul_silu_1         0.02%     251.868us         0.04%     584.698us      24.362us      21.738ms         1.93%      21.738ms     905.739us            24  
+                        ampere_fp16_s1688gemm_fp16_128x128_ldg8_f2f_tn         0.00%       0.000us         0.00%       0.000us       0.000us      16.500ms         1.47%      16.500ms     687.488us            24  
+                                                           aten::copy_         0.67%       9.047ms        19.40%     262.363ms     271.878us      13.696ms         1.22%      13.696ms      14.193us           965  
+void at::native::unrolled_elementwise_kernel<at::native::direct_cop...         0.00%       0.000us         0.00%       0.000us       0.000us      12.883ms         1.14%      12.883ms     134.193us            96  
+                    triton_per_fused__to_copy_add_mean_mul_pow_rsqrt_2         0.00%       0.000us         0.00%       0.000us       0.000us      11.289ms         1.00%      11.289ms       4.900us          2304  
+                                                          aten::argmax         0.19%       2.567ms         0.36%       4.823ms      50.236us       8.720ms         0.77%       8.720ms      90.838us            96  
+void at::native::reduce_kernel<512, 1, at::native::ReduceOp<float, ...         0.00%       0.000us         0.00%       0.000us       0.000us       8.691ms         0.77%       8.691ms      90.530us            96  
+                    triton_per_fused__to_copy_add_mean_mul_pow_rsqrt_0         0.00%       0.000us         0.00%       0.000us       0.000us       7.940ms         0.71%       7.940ms       3.446us          2304  
+void cublasLt::splitKreduce_kernel<32, 16, int, __half, __half, flo...         0.00%       0.000us         0.00%       0.000us       0.000us       6.825ms         0.61%       6.825ms       2.993us          2280  
+                    triton_per_fused__to_copy_add_mean_mul_pow_rsqrt_2         0.03%     341.627us         0.04%     598.902us      24.954us       6.690ms         0.59%       6.690ms     278.733us            24  
+                                                triton_poi_fused_cat_3         0.00%       0.000us         0.00%       0.000us       0.000us       6.425ms         0.57%       6.425ms       2.910us          2208  
+                                                       cudaGraphLaunch         5.33%      72.075ms         5.36%      72.470ms      30.514us       6.374ms         0.57%       6.374ms       2.684us          2375  
+----------------------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 1.352s
+Self CUDA time total: 1.126s

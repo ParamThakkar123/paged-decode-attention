@@ -61,6 +61,46 @@ class Result:
     note: str = ""
 
 
+def _profiled_generate(llm, prompts, params, args):
+    """Run the timed generate under torch.profiler and write the artifacts.
+
+    CUPTI ships inside the torch wheel, so this needs no Nsight install and no
+    root -- which is what makes it usable in the WSL2 image the engine runs in.
+    It profiles the *real* decode loop: whatever kernels this model actually
+    launches, on real weights, with whichever attention backend is installed.
+
+    Two files come out: a Chrome trace for `chrome://tracing` / Perfetto, and a
+    plain-text per-kernel table, because a binary nobody opens is not evidence.
+    """
+    import torch
+    from torch.profiler import ProfilerActivity, profile
+
+    out_dir = pathlib.Path(args.profile)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tag = "ours" if args.backend == "ours" else "vllm-default"
+
+    with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                 record_shapes=False, with_stack=False) as prof:
+        outs = llm.generate(prompts, params)
+        torch.cuda.synchronize()
+
+    trace = out_dir / f"decode-{tag}.json"
+    prof.export_chrome_trace(str(trace))
+
+    table = prof.key_averages().table(
+        sort_by="self_cuda_time_total", row_limit=25, max_name_column_width=70)
+    txt = out_dir / f"decode-{tag}.txt"
+    header = (f"torch.profiler -- {args.model}\n"
+              f"backend: {tag}\n"
+              f"requests: {len(prompts)}  output_tokens: {args.output_tokens}\n"
+              f"device: {torch.cuda.get_device_name(0)}  "
+              f"torch {torch.__version__}\n\n")
+    txt.write_text(header + table, encoding="utf-8")
+
+    print(f"  [profile] wrote {txt} and {trace}")
+    return outs, prof
+
+
 def build_trace(n: int, prompt_lo: int, prompt_hi: int, seed: int) -> list[str]:
     """Synthetic prompts of controlled length.
 
@@ -113,7 +153,10 @@ def run(args) -> Result:
         stats.update(decode_calls=0, decode_tokens=0, delegated_calls=0)
 
     t0 = time.perf_counter()
-    outs = llm.generate(prompts, params)
+    if getattr(args, "profile", None):
+        outs, prof = _profiled_generate(llm, prompts, params, args)
+    else:
+        outs, prof = llm.generate(prompts, params), None
     wall = time.perf_counter() - t0
 
     if stats is not None:
@@ -215,6 +258,9 @@ def main() -> None:
     ap.add_argument("--slo", default="10,20,50,100")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default="results/vllm_e2e.json")
+    ap.add_argument("--profile", default=None, metavar="DIR",
+                    help="profile the timed generate with torch.profiler and "
+                         "write a chrome trace + per-kernel table into DIR")
     args = ap.parse_args()
 
     import os

@@ -87,7 +87,7 @@ module load. `sudo apt install build-essential python3.10-dev` fixes everything
 in one line if you have the password.
 
 Without root, two pip-installable pieces do the job, and this is what produced
-the single-process comparison in README §4.4:
+the WSL2 environment these runs use:
 
 ```bash
 # 1. a C compiler, from PyPI
@@ -159,7 +159,7 @@ The V1 engine runs in a **child process** by default, where an in-process
 monkeypatch never applies. `bench_vllm.py` sets
 `VLLM_ENABLE_V1_MULTIPROCESSING=0` for *both* backends — running the baseline the
 same way is the difference between a comparison and a confound, and it moved the
-baseline TPOT from 14.4 ms to 20.7 ms. For production use, register `install()`
+baseline TPOT materially. For production use, register `install()`
 through a `vllm.general_plugins` entry point instead; that runs in the worker.
 
 ## Two deliberate scope limits
@@ -168,13 +168,9 @@ through a `vllm.general_plugins` entry point instead; that runs in the worker.
 no causal masking across a query tile. Prefill is delegated. A prefill-capable
 kernel is a different kernel, not a flag on this one.
 
-**Triton, not CUDA.** The CUDA kernel is instantiated ahead of time for a fixed
-list of `(head_dim, group)` pairs — (128,4) (128,8) (64,4) (64,7) (64,8) — and
-raises naming the shape for anything else. The Triton kernel takes both as
-`constexpr` and compiles on demand, so it is the one wired into vLLM: a serving
-backend cannot refuse a model shape. Section 4.6 of the main README measures both
-across five real model shapes, and it is also the CUDA kernel that degrades as
-the GQA group grows (82 % of peak at group 8 against Triton's 102 %).
+**Triton only.** Group and `head_dim` are `constexpr` in the Triton kernel, so
+it specializes on demand and can serve any GQA shape. That matters for a serving
+backend, which cannot refuse a model shape.
 
 ## Picking a model that fits 4 GiB
 
@@ -185,7 +181,7 @@ The weights, the CUDA context (~300 MiB) and the KV pool all share 4 GiB.
 | Qwen2.5-0.5B | 14 / 2 | 64 | 7 | ~1.0 GiB | yes — **used for section 6.1** |
 | Llama-3.2-1B | 32 / 8 | 64 | 4 | ~2.5 GiB | yes, gated |
 | Qwen2.5-1.5B | 12 / 2 | 128 | 6 | ~3.1 GiB | tight |
-| Llama-3-8B | 32 / 8 | 128 | 4 | ~16 GiB | no — the shape section 4 benchmarks |
+| Llama-3-8B | 32 / 8 | 128 | 4 | ~16 GiB | no |
 
 Qwen2.5-0.5B is what the end-to-end run uses: it is ungated, and at
 `gpu_memory_utilization=0.7` it leaves enough room for a KV pool big enough to
@@ -225,9 +221,9 @@ not populate `RequestOutput.metrics`. That yields one number per run, so p90/p99
 are reported as equal to p50 rather than fabricated from a distribution that was
 never measured.
 
-`--enforce-eager` disables vLLM's CUDA graphs. Worth running once: section 5.1 of
-the main README measures 254 us of per-launch host overhead on this platform, and
-the eager-vs-graphed gap here is the same effect at model scale.
+`--enforce-eager` disables vLLM's CUDA graphs. Worth running once: per-launch
+host overhead on WDDM is large enough that the eager-vs-graphed gap is visible at
+model scale.
 
 ## What the end-to-end numbers say
 
@@ -235,6 +231,5 @@ TPOT is the same within noise, and that is the expected result. At this model's
 decode shape (14/2/64, batch 24, ~300-500 tokens of context) our kernel takes
 29-39 us per call, so 24 layers of attention is 0.7-0.9 ms of a ~15.7 ms step --
 **about 5 %**. Making attention free would move TPOT by 5 %; a 20 % kernel win
-moves it by 1 %. The kernel-level gap is real (README section 4.4) and this model
-is simply not where it shows up. Qwen2.5-0.5B is the model that *fits in 4 GiB*,
-not the model this kernel is for.
+moves it by 1 %. Qwen2.5-0.5B is the model that *fits in 4 GiB*, not the model
+this kernel is for -- see section 4 of the main README.
