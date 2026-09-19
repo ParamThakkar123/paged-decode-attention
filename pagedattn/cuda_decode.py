@@ -25,19 +25,17 @@ _BUILD = _HERE.parent / "build" / "cuda_ext"
 _EXT = None
 _LOAD_ERROR: str | None = None
 _WS = _Workspace()
-# Hoisted: an undefined tensor stands in for the optional arguments, and
-# allocating one per call shows up in the profile at short context lengths.
+# Hoisted: an undefined tensor stands in for the optional arguments, and one
+# allocation per call is visible in the profile at short contexts.
 _EMPTY = torch.Tensor()
 
 
 def _ensure_msvc_env() -> None:
-    """Make nvcc able to find MSVC regardless of which shell we were started from.
+    """Let nvcc find MSVC from any shell.
 
-    nvcc shells out to vcvars64.bat, and that script breaks if Git Bash's
-    /usr/bin is on PATH -- its `sort` and `find` shadow the Windows ones and
-    vcvars exits with "Could not set up the environment for Microsoft Visual
-    Studio". Rather than require a Developer Prompt, we run vcvars ourselves with
-    a sanitized PATH and import the resulting variables into this process.
+    nvcc shells out to vcvars64.bat, which breaks when Git Bash's /usr/bin is on
+    PATH -- its `sort` and `find` shadow the Windows ones. Rather than require a
+    Developer Prompt, run vcvars with a sanitized PATH and import the result.
     """
     if os.name != "nt" or "VCToolsInstallDir" in os.environ:
         return
@@ -68,8 +66,8 @@ def _ensure_msvc_env() -> None:
     if vcvars is None:
         return  # let nvcc produce its own error
 
-    # Drop Git's unix bin dirs (their `sort`/`find` break vcvars) and dedupe, so
-    # the PATH vcvars hands back stays under cmd.exe's 8191-char command limit.
+    # Drop Git's unix bin dirs and dedupe, so the PATH vcvars hands back stays
+    # under cmd.exe's 8191-char limit.
     seen: set[str] = set()
     clean: list[str] = []
     for p in os.environ.get("PATH", "").split(os.pathsep):
@@ -80,8 +78,8 @@ def _ensure_msvc_env() -> None:
         clean.append(p)
     env = dict(os.environ, PATH=os.pathsep.join(clean))
 
-    # The command must be one string: subprocess's Windows list-quoting would
-    # escape the inner quotes around the .bat path and cmd would not find it.
+    # One string, not a list: Windows list-quoting escapes the inner quotes
+    # around the .bat path and cmd then cannot find it.
     cmdline = f'cmd.exe /s /c ""{vcvars}" >nul 2>&1 && set"'
     res = subprocess.run(cmdline, capture_output=True, text=True, env=env, timeout=180)
     if res.returncode != 0:
@@ -156,16 +154,13 @@ VARIANTS = {
     "v2_unroll": 1,  # 4 warps, unroll 4: 8 in flight
     "v3_tuned": 2,  # 8 warps, unroll 4: 8 in flight, double the warps
 }
-# Measured on RTX 3050 (sm_86): the unroll is worth 5-8 points of peak bandwidth,
-# but doubling the warps on top of it is consistently a slight *loss* -- see the
-# README's "Occupancy is not the goal". So v2, not v3, is the default.
+# Measured on sm_86: the unroll is worth 5-8 points of peak, and doubling the
+# warps on top of it is consistently a slight loss. Hence v2, not v3.
 DEFAULT_VARIANT = "v2_unroll"
 
-# (head_dim, gqa_group) pairs compiled into the extension. The Triton kernel
-# takes both as constexpr and specializes on demand; the CUDA kernel has to be
-# instantiated ahead of time, so this list is the honest boundary of what it can
-# serve. Callers should consult `supports_shape` rather than discover it from a
-# TORCH_CHECK deep in a launch.
+# (head_dim, gqa_group) pairs compiled into the extension. Triton specializes
+# on demand; this kernel is instantiated ahead of time, so the list is the real
+# boundary of what it serves. Callers should ask `supports_shape` first.
 SUPPORTED_SHAPES = frozenset({(128, 4), (128, 8), (64, 4), (64, 7), (64, 8)})
 
 
@@ -200,12 +195,11 @@ def paged_decode_cuda(
         out = torch.empty((b, hq, d), dtype=q.dtype, device=q.device)
 
     if num_splits is None:
-        # See the note in triton_decode.paged_decode_triton: this sync is why the
-        # split count is a caller-supplied argument on the hot path.
+        # A full device sync -- which is why the hot path passes splits in.
         max_seq = int(cache.seq_lens.max().item())
         sm = torch.cuda.get_device_properties(q.device).multi_processor_count
-        # The CUDA kernel consumes 8 tokens per iteration, so its "tile" for the
-        # starvation heuristic is 8 rather than the Triton BLOCK_N.
+        # This kernel consumes 8 tokens per iteration, so its tile for the
+        # starvation heuristic is 8, not Triton's BLOCK_N.
         num_splits = pick_num_splits(b, shape.num_kv_heads, max_seq, sm, block_n=256)
 
     k_scale = cache.k_scale if cache.k_scale is not None else _EMPTY

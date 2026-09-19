@@ -1,19 +1,16 @@
-"""End-to-end decode-loop benchmark: TPOT, throughput, throughput at a latency SLO.
+"""End-to-end decode-loop benchmark: TPOT, throughput, throughput at an SLO.
 
     python -m bench.bench_serving --steps 400 --max-batch 32
     python -m bench.bench_serving --impls triton,cuda,sdpa_memeff --out results/serving.json
 
-What this measures, precisely: the **attention portion** of a decode step, inside
-a real continuous-batching loop -- ragged and growing sequence lengths, a live
-block allocator, sequences retiring and being replaced, CUDA-graph replay with
-bucketed batch sizes. It is not a full model forward; a Llama-3-8B's weights do
-not fit in 4 GB, so quoting a whole-model TPOT here would be a number this
-machine cannot produce. Every figure below is per-layer attention time, and the
-README says how to scale it to a model.
+Measures the **attention portion** of a decode step inside a real
+continuous-batching loop: ragged and growing sequence lengths, a live block
+allocator, sequences retiring and being replaced, graph replay with bucketed
+batch sizes. Not a full model forward -- Llama-3-8B's weights do not fit in
+4 GB, so a whole-model TPOT here would be a number this machine cannot produce.
 
-That restriction does not weaken the comparison: attention is the only part of a
-decode step whose cost grows with context length, and it is the only part any of
-these implementations changes.
+That does not weaken the comparison: attention is the only part of a decode step
+whose cost grows with context, and the only part these implementations change.
 """
 
 from __future__ import annotations
@@ -49,9 +46,8 @@ def _kernel(impl: str):
         return lambda q, c, out, num_splits: cuda_decode.paged_decode_cuda(
             q, c, out=out, num_splits=num_splits)
     if impl == "sdpa_memeff":
-        # The dense baseline has to gather the paged KV into contiguous tensors
-        # and expand the KV heads 4x every single step, because it understands
-        # neither pages nor GQA. That gather is part of its cost and is timed.
+        # Understands neither pages nor GQA, so it gathers and expands the KV
+        # 4x every step. That is part of its cost and is timed.
         def run(q, c, out, num_splits):
             k, v = gather_contiguous(c)
             group = q.shape[1] // k.shape[1]
@@ -179,8 +175,7 @@ def run_loop(
         max_ctx=max_ctx_seen,
         kv_utilization=statistics.mean(util),
         completed=sched.completed,
-        # Throughput you can actually promise: tokens/s counting only the steps
-        # that met the deadline.
+        # Throughput you can promise: only steps that met the deadline.
         slo_attainment={
             f"{s:g}ms": sum(1 for x in lat if x <= s) / len(lat) for s in slo_ms
         },

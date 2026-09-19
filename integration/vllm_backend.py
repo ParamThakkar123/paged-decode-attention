@@ -1,34 +1,27 @@
-"""A vLLM V1 attention backend that routes **decode** to our Triton kernel.
+"""A vLLM V1 attention backend that routes decode to our Triton kernel.
 
-Enable it with the helper in `pagedattn_plugin.py`, or by hand:
+Call `install()` before constructing the engine:
 
     VLLM_ENABLE_V1_MULTIPROCESSING=0 \
     PYTHONPATH=/path/to/inference_benchmark \
     python -c "import integration.vllm_backend as b; b.install(); ..."
 
-Design: **subclass vLLM's own `TritonAttentionBackend` and override only
-`forward`.** Building V1 attention metadata correctly (query_start_loc,
-slot_mapping, block tables, cascade/local-attention variants, CUDA-graph capture
-paths) is the fiddly, version-sensitive part, and reimplementing it would be
-both more code and more ways to be subtly wrong. Everything except the decode
-call is inherited.
-
-What we intercept, and what we hand back:
+Subclasses vLLM's `TritonAttentionBackend` and overrides only `forward`.
+Building V1 attention metadata (query_start_loc, slot_mapping, block tables,
+cascade and local-attention variants, graph-capture paths) is the fiddly,
+version-sensitive part; inheriting it is less code and fewer ways to be wrong.
 
   pure decode  (`max_query_len == 1`)  -> our kernel
   anything else                        -> `super().forward()`
 
-"Anything else" is not a corner case to apologize for -- it is prefill, mixed
-prefill+decode batches, fp8 KV caches, sliding-window and ALiBi layers, and
-soft-capped logits. Our kernel is a single-query decode kernel with no causal
-mask across a query tile and no positional-bias support; pretending otherwise
-would produce wrong numbers rather than an error. The delegation is the design,
-not a gap.
+"Anything else" is prefill, mixed batches, fp8 KV caches, sliding-window and
+ALiBi layers, soft-capped logits. This is a single-query decode kernel with no
+causal mask across a query tile and no positional bias, so the delegation is
+the design -- pretending otherwise would give wrong numbers, not an error.
 
-Layout note: vLLM allocates the V1 KV cache as
-`[2, num_blocks, block_size, num_kv_heads, head_size]`, so `kv_cache.unbind(0)`
-yields exactly the NHD tensors our kernel already expects -- no conversion, no
-copy. That is the payoff for matching this layout in `pagedattn/cache.py`.
+vLLM's V1 KV cache is `[2, num_blocks, block_size, num_kv_heads, head_size]`,
+so `kv_cache.unbind(0)` yields the NHD tensors this kernel takes: no conversion,
+no copy. That is the payoff for matching the layout in `pagedattn/cache.py`.
 """
 
 from __future__ import annotations
@@ -46,8 +39,8 @@ from pagedattn.cache import PagedKVCache  # noqa: E402
 from pagedattn.config import ModelShape  # noqa: E402
 from pagedattn.triton_decode import paged_decode_triton, pick_num_splits  # noqa: E402
 
-# Importing this module must not require vLLM: the Windows side imports it for
-# lint and shape-gate tests. The classes below only exist where vLLM does.
+# Import must not require vLLM: the Windows side imports this for lint and
+# shape-gate tests. The classes below exist only where vLLM does.
 try:
     from vllm.v1.attention.backends.triton_attn import (  # noqa: E402
         TritonAttentionBackend, TritonAttentionImpl)
@@ -67,8 +60,7 @@ def supports_shape(num_q_heads: int, num_kv_heads: int, head_dim: int) -> tuple[
     return True, ""
 
 
-# Counters, so a run can prove the kernel was actually used rather than silently
-# delegated. `bench_vllm.py` prints them.
+# Counters, so a run can prove the kernel ran rather than silently delegating.
 STATS = {"decode_calls": 0, "decode_tokens": 0, "delegated_calls": 0}
 
 
@@ -120,8 +112,8 @@ if HAVE_VLLM:
 
             key_cache, value_cache = kv_cache.unbind(0)
 
-            # Write this step's K/V into the paged cache. vLLM's own impl does
-            # this too; we are replacing only the attention that follows it.
+            # Write this step's K/V into the cache; we replace only the
+            # attention that follows.
             if self.kv_sharing_target_layer_name is None:
                 torch.ops._C_cache_ops.reshape_and_cache_flash(
                     key, value, key_cache, value_cache,
@@ -144,9 +136,7 @@ if HAVE_VLLM:
                 seq_lens=attn_metadata.seq_lens[:n],
             )
 
-            # max_seq_len is already a Python int on the metadata, so choosing a
-            # split count costs no device sync -- which is the whole point of
-            # README section 5.1.
+            # max_seq_len is already an int, so this costs no device sync.
             splits = pick_num_splits(n, self.num_kv_heads,
                                      int(attn_metadata.max_seq_len),
                                      _sm_count(query.device), 64)
@@ -188,15 +178,12 @@ QUALNAME = "integration.vllm_backend.PagedAttnTritonBackend"
 
 
 def install() -> str:
-    """Make vLLM select this backend.
+    """Make vLLM select this backend; returns the qualname it will use.
 
-    vLLM resolves a backend by calling `current_platform.get_attn_backend_cls()`,
-    which returns a *qualified name string* that `resolve_obj_by_qualname` then
-    imports. `VLLM_ATTENTION_BACKEND` only selects among the built-in `_Backend`
-    enum members, so an out-of-tree class cannot be chosen through it; patching
-    the platform hook is the supported shape of the extension point.
-
-    Returns the qualname that will now be used.
+    vLLM resolves backends through `current_platform.get_attn_backend_cls()`,
+    which returns a qualname string for `resolve_obj_by_qualname`.
+    `VLLM_ATTENTION_BACKEND` only selects built-in `_Backend` enum members, so
+    an out-of-tree class cannot be named through it.
     """
     from vllm.platforms import current_platform
 
@@ -207,7 +194,7 @@ def install() -> str:
 
     def patched(cls_, selected_backend, head_size, dtype, kv_cache_dtype,
                 block_size, use_v1, use_mla, *args, **kwargs):
-        # Only intercept the plain (non-MLA) V1 path we actually implement.
+        # Only the plain (non-MLA) V1 path is implemented here.
         if use_v1 and not use_mla:
             return QUALNAME
         return original(selected_backend, head_size, dtype, kv_cache_dtype,
@@ -219,7 +206,8 @@ def install() -> str:
 
 
 def maybe_install_from_env() -> bool:
-    """Install if `PAGEDATTN_VLLM_BACKEND=1`. Called by the plugin entry point."""
+    """Install if `PAGEDATTN_VLLM_BACKEND=1`, for a `vllm.general_plugins`
+    entry point (which runs inside the worker process)."""
     if os.environ.get("PAGEDATTN_VLLM_BACKEND", "") not in ("1", "true", "True"):
         return False
     install()

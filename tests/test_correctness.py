@@ -2,13 +2,11 @@
 
 Run:  python -m pytest tests -q          (or: python tests/test_correctness.py)
 
-Tolerances. The kernel and the reference read the *same* cache, quantized or
-not, so quantization error cancels and what is left is fp16 accumulation noise:
-1e-2 relative is loose for that and tight enough to catch a real bug (a wrong
-block-table index or a botched softmax rescale blows past it immediately).
-Quantization error versus an fp16 cache is a separate measurement and lives in
-`test_quantization_accuracy`, which is where the FP8/INT8 quality claim in the
-README comes from.
+Kernel and reference read the *same* cache, so quantization error cancels and
+only fp16 accumulation noise is left -- 1e-2 relative is loose for that and
+still catches a wrong block-table index or a botched softmax rescale.
+Quantization error against an fp16 cache is measured separately, in
+`test_quantization_accuracy`.
 """
 
 from __future__ import annotations
@@ -174,12 +172,11 @@ def test_sdpa_math_baseline_matches_reference():
 
 @pytest.mark.parametrize("kv_dtype", ["fp8_e5m2", "int8"])
 def test_quantization_accuracy(kv_dtype):
-    """Quantized KV vs an fp16 KV cache holding the *same* underlying values.
+    """Quantized KV vs an fp16 cache holding the same underlying values.
 
-    This is the number that matters for a serving decision: how much does the
-    attention output move when you halve the cache. INT8 with per-(token,head)
-    scales should land near fp16; e5m2 keeps only 2 mantissa bits and is
-    visibly worse, which is exactly the tradeoff the README reports.
+    The serving-relevant number: how far the output moves when the cache is
+    halved. INT8 with per-(token,head) scales lands near fp16; e5m2 keeps 2
+    mantissa bits and is visibly worse.
     """
     batch, seqlen = 2, 2048
     q, c_fp16 = _qkv(batch, seqlen, kv_dtype="fp16", seed=11)
@@ -188,10 +185,9 @@ def test_quantization_accuracy(kv_dtype):
     ref = reference.reference_decode(q, c_fp16)
     got = paged_decode_triton(q, c_q)
     rel = _rel(got, ref)
-    # Ceilings set a little above the measured values (int8 ~0.4%, e5m2 ~8%), so
-    # they catch a regression in the dequant path rather than merely catching a
-    # totally broken one. `python -m bench.quant_accuracy` reports the full
-    # picture including RMS error and cosine similarity.
+    # Just above the measured values (int8 ~0.4%, e5m2 ~8%), so a dequant
+    # regression fails rather than only a totally broken path.
+    # `python -m bench.quant_accuracy` reports RMS and cosine too.
     ceiling = {"int8": 0.02, "fp8_e5m2": 0.15}[kv_dtype]
     assert rel < ceiling, f"{kv_dtype} relative error {rel:.4f} exceeded {ceiling}"
     print(f"\n{kv_dtype}: max relative output error vs fp16 cache = {rel:.4f}")
@@ -217,8 +213,8 @@ OTHER_SHAPES = [(32, 8, 128), (64, 8, 128), (32, 8, 64), (14, 2, 64), (16, 2, 64
 @pytest.mark.parametrize("hq,hkv,d", OTHER_SHAPES)
 @pytest.mark.parametrize("num_splits", [1, 4])
 def test_triton_other_model_shapes(hq, hkv, d, num_splits):
-    """The Triton kernel takes group and head_dim as constexpr, so it should
-    compile for any real model shape, not just the one we benchmark."""
+    """Takes group and head_dim as constexpr, so it should compile for any
+    real model shape, not just the benchmark one."""
     shape = MHA_DEBUG.__class__(hq, hkv, d, name=f"{hq}x{hkv}x{d}")
     q, c = _qkv(3, 777, shape=shape, seed=7)
     ref = reference.reference_decode(q, c)
@@ -229,9 +225,8 @@ def test_triton_other_model_shapes(hq, hkv, d, num_splits):
 @cuda_only
 @pytest.mark.parametrize("hq,hkv,d", OTHER_SHAPES)
 def test_cuda_other_model_shapes(hq, hkv, d):
-    """The CUDA kernel is instantiated per (head_dim, group); every pair it
-    claims to support must actually work, and the ones it does not must raise
-    rather than silently run a wrong specialization."""
+    """Instantiated per (head_dim, group): supported pairs must work, and
+    unsupported ones must raise rather than run a wrong specialization."""
     shape = MHA_DEBUG.__class__(hq, hkv, d, name=f"{hq}x{hkv}x{d}")
     q, c = _qkv(3, 777, shape=shape, seed=7)
     ok, _ = cuda_decode.supports_shape(d, hq // hkv)

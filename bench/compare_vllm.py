@@ -3,7 +3,7 @@
     python -m bench.compare_vllm --out results/VLLM_COMPARISON.md
 
 Reads `results/vllm_kernels.json`, which `bench/vllm_kernels_baseline.py`
-produces. When that ran with a working Triton (see integration/README.md — it
+produces. When that ran with a working Triton (see integration/README.md -- it
 needs a host C compiler, obtainable without root via `pip install ziglang`), all
 three kernels are timed **in one process, eagerly, on the same allocations**, and
 their outputs are checked against each other. That is the measurement to trust:
@@ -108,7 +108,7 @@ def main() -> None:
         "",
         "## Where we lose, and why",
         "",
-        "At **batch 1-2 with a 1k context** both baselines beat us — FA2 by up to "
+        "At **batch 1-2 with a 1k context** both baselines beat us -- FA2 by up to "
         "1.8x and vLLM PagedAttention by up to 2.2x. That is the smallest, most "
         "parallelism-starved point in the sweep, exactly the regime README section "
         "5.3 identifies: 8-16 CTAs on a 16-SM GPU with only 4 MB of KV to move. "
@@ -128,7 +128,7 @@ def main() -> None:
         "`[num_blocks, page_size, num_kv_heads, head_dim]` plus a dense block table "
         "unchanged, so no conversion cost is charged to it. vLLM's PagedAttention "
         "needs its own split-K layout, which `_to_vllm_v0_layout` repacks once "
-        "*outside* the timed region — charging it per call would be benchmarking a "
+        "*outside* the timed region -- charging it per call would be benchmarking a "
         "memcpy.",
     ]
 

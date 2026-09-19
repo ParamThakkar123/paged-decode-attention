@@ -1,18 +1,14 @@
-"""GPU timing that does not lie to you.
+"""GPU timing for decode microbenchmarks.
 
-Two things ruin decode-kernel microbenchmarks and both are handled here:
+Two things that would otherwise ruin the numbers:
 
-1. *L2 residency.* At batch=1, seqlen=1k the whole KV working set is 4 MB. Run
-   that in a tight loop on a card with a 2 MB L2 and you will measure a number
-   that no real server ever sees. `flush_l2=True` scrubs the cache between
-   iterations, and `l2_resident_fraction` reports how much of the working set
-   would have fit, so suspicious rows can be flagged rather than silently
-   believed.
+1. *L2 residency.* At batch 1 / seqlen 1k the KV working set is 4 MB, which a
+   tight loop keeps in a 2 MB L2 -- a number no server ever sees. `flush_l2`
+   scrubs the cache between iterations.
 
-2. *CUDA event overhead.* A single event pair costs a few microseconds, which is
-   10-20% of a short decode kernel. We time a run of `inner` launches between one
-   event pair and divide, so the per-call number still includes launch overhead
-   (a serving runtime pays that too) without the measurement tax.
+2. *Event overhead.* An event pair costs a few microseconds, 10-20% of a short
+   decode kernel. Timing `inner` launches per pair amortizes it while keeping
+   launch cost in the per-call number, which a serving runtime also pays.
 """
 
 from __future__ import annotations
@@ -28,7 +24,7 @@ def l2_bytes(device: int = 0) -> int:
 
 
 class _L2Flusher:
-    """A buffer comfortably larger than L2, rewritten between timed runs."""
+    """A buffer larger than L2, rewritten between timed runs."""
 
     def __init__(self, device: int = 0) -> None:
         n = max(4 * l2_bytes(device), 16 << 20)
@@ -57,21 +53,18 @@ def bench(
     flush_l2: bool = True,
     budget_ms: float = 600.0,
 ) -> dict[str, float]:
-    """Return {'ms': median, 'ms_p20', 'ms_p80', 'inner', 'reps'} per single call.
+    """Return {'ms': median, 'ms_p20', 'ms_p80', 'inner', 'reps'} per call.
 
-    `budget_ms` bounds the wall time spent on one measurement. Without it the
-    slow dense baselines dominate a sweep: PyTorch's math SDPA takes ~350 ms per
-    call at batch 64 / context 2k, and 20 warmups plus 30 reps of that is 20
-    seconds for a single cell of the table. Fast kernels still get the full rep
-    count -- the clamp only bites when a call is already slow enough that its
-    run-to-run variance is negligible.
+    `budget_ms` bounds wall time per measurement. Without it the slow dense
+    baselines dominate: math SDPA takes ~350 ms per call at batch 64 / ctx 2k,
+    so 20 warmups + 30 reps is 20 s for one cell. The clamp only bites once a
+    call is slow enough that run-to-run variance is negligible.
     """
     for _ in range(3):
         fn()
     torch.cuda.synchronize()
 
-    # Always calibrate: the per-call cost decides both `inner` and how many
-    # repetitions we can afford.
+    # Calibrate: per-call cost decides both `inner` and the rep budget.
     start, end = torch.cuda.Event(True), torch.cuda.Event(True)
     start.record()
     for _ in range(3):
@@ -119,8 +112,8 @@ def bench(
 
 
 def theoretical_peak_gbs(device: int = 0) -> float | None:
-    """Theoretical DRAM bandwidth from the memory clock and bus width, if torch
-    exposes them (it does not on every build)."""
+    """Theoretical DRAM bandwidth from clock and bus width, if torch exposes
+    them (not on every build)."""
     props = torch.cuda.get_device_properties(device)
     clock_khz = getattr(props, "memory_clock_rate", None)  # kHz
     bus_bits = getattr(props, "memory_bus_width", None)
@@ -131,14 +124,11 @@ def theoretical_peak_gbs(device: int = 0) -> float | None:
 
 
 def triton_usable() -> bool:
-    """Can Triton actually compile and launch, not merely be imported?
+    """Can Triton compile and launch, not merely be imported?
 
-    `import triton` succeeds on a machine with no host C compiler; the failure
-    only appears at first launch, when Triton builds its runtime shim:
-    "RuntimeError: Failed to find C compiler." Checking the import alone
-    therefore reports a working Triton on an environment where every kernel
-    will fail -- which is exactly what the WSL2 image used for the vLLM
-    baselines does.
+    `import triton` succeeds without a host C compiler; the failure appears at
+    first launch ("Failed to find C compiler"). Checking the import alone
+    reports a working Triton on the WSL2 image, where every kernel fails.
     """
     global _TRITON_OK
     if _TRITON_OK is not None:
@@ -162,11 +152,9 @@ def triton_usable() -> bool:
 
 _TRITON_OK: bool | None = None
 
-# The probe kernel must live at module scope. Triton resolves a kernel's free
-# names from its *module* globals, so a kernel defined inside a function sees
-# neither a locally-imported `tl` nor anything else local, and fails with
-# `NameError('tl is not defined')` — which reads exactly like "Triton is
-# broken" and silently drops our kernel from any comparison that checks this.
+# Must be module scope: Triton resolves free names from module globals, so a
+# kernel defined inside a function fails with `NameError('tl is not defined')`,
+# which looks exactly like "Triton is broken".
 try:
     import triton as _triton
     import triton.language as tl
@@ -182,10 +170,8 @@ except Exception:  # triton not importable at all
 def measured_peak_gbs_torch(bytes_total: int = 512 << 20, device: int = 0) -> float:
     """Streaming-read peak using only torch ops -- no Triton, no C compiler.
 
-    Needed because Triton JITs through a host C compiler, and the WSL2 image
-    used for the vLLM baselines has none. A large fp16 reduction is a good
-    enough proxy: it is DRAM-bound and ATen's reduction is well optimized, so it
-    lands within a couple of percent of the tuned Triton probe.
+    A large fp16 reduction is DRAM-bound and well optimized, landing within a
+    couple of percent of the tuned Triton probe below.
     """
     free, _ = torch.cuda.mem_get_info(device)
     nbytes = min(bytes_total, int(free * 0.35))
@@ -204,16 +190,14 @@ def measured_peak_gbs_torch(bytes_total: int = 512 << 20, device: int = 0) -> fl
 def measured_peak_gbs(
     bytes_total: int = 512 << 20, device: int = 0, verbose: bool = False
 ) -> float:
-    """Best streaming-read bandwidth this GPU will give us.
+    """Best streaming-read bandwidth this GPU will give.
 
-    A pure read is the right probe: decode attention reads the KV cache and
-    writes essentially nothing, so a read+write copy benchmark would understate
-    the ceiling we should be measured against.
+    A pure read is the right probe: decode attention reads KV and writes
+    almost nothing, so a copy benchmark would understate the ceiling.
 
-    We sweep tile size, vector width and warp count and keep the best, because a
-    single arbitrary configuration can fall 15-20% short of what the memory
-    system can actually deliver -- and a probe that undershoots produces
-    "% of peak" numbers above 100, which is worse than useless.
+    Sweeps tile size, vector width and warp count because one arbitrary config
+    can fall 15-20% short, and a probe that undershoots yields "% of peak"
+    above 100.
     """
     import triton
     import triton.language as tl
@@ -226,7 +210,7 @@ def measured_peak_gbs(
         for u in tl.static_range(UNROLL):
             offs = base + u * BLOCK + tl.arange(0, BLOCK)
             acc += tl.load(X + offs, mask=offs < n, other=0.0).to(tl.float32)
-        # Guarded so the loads cannot be eliminated, but never actually taken.
+        # Guarded so the loads survive DCE, but never taken.
         if tl.sum(acc) == 1.2345e30:
             tl.store(Out + pid, 1.0)
 
@@ -266,13 +250,10 @@ def measured_peak_gbs(
 def _sane_peak(measured: float, label: str) -> float:
     """Reject a bandwidth probe that is obviously wrong.
 
-    The probe occasionally reads far too low -- another process still holding
-    the GPU, a power-state transition, a scheduling hiccup. Every "% of peak" in
-    the repo divides by this number, so a bad probe does not produce a slightly
-    off result, it produces an impossible one: a 380 us kernel once reported
-    396 % of peak. Anything below 60 % of the theoretical ceiling is not a slow
-    GPU, it is a broken measurement, and callers are told rather than left to
-    publish it.
+    The probe occasionally reads far too low (another process on the GPU, a
+    power-state transition). Every "% of peak" divides by it, so a bad probe
+    gives impossible results -- a 380 us kernel once reported 396 % of peak.
+    Under 60 % of theoretical is a broken measurement, not a slow GPU.
     """
     theo = theoretical_peak_gbs()
     if theo and measured < 0.60 * theo:

@@ -1,34 +1,21 @@
 // Hand-tuned paged-KV GQA decode attention for Ampere (sm_80/sm_86).
 //
-// Thread mapping (the thing that matters):
+// Thread mapping: THREADS_PER_ROW lanes cooperate on one KV token's head_dim
+// row, VEC = 8 elements each. At head_dim 128 that is 16 lanes x one 16 B
+// LDG.E.128 = 256 B contiguous per row, exactly two cache lines. A warp covers
+// ROWS_PER_WARP tokens and a 4-warp block ROWS_PER_ITER per iteration, each
+// with its own online-softmax state, merged once via shared memory.
 //
-//   THREADS_PER_ROW = 16 lanes cooperate on one KV token's head_dim=128 row.
-//   Each lane loads VEC = 8 elements. For fp16 that is one 16 B LDG.E.128 per
-//   lane, so a row is 16 x 16 B = 256 B of perfectly contiguous, perfectly
-//   coalesced DRAM traffic -- exactly two 128 B cache lines, no partial sectors.
-//   For the 1-byte KV dtypes the same VEC=8 is an 8 B load and a row is 128 B,
-//   still exactly one cache line.
+// Nsight: 128 registers/thread, 16.7% occupancy at batch 1, 33.2% at batch 32.
+// Low and fine -- latency is hidden by outstanding loads per thread (UNROLL),
+// not resident warps; the 8-warp variant has twice the occupancy and is slower
+// (README section 5.4).
 //
-//   A warp therefore covers ROWS_PER_WARP = 2 tokens, and a 4-warp block covers
-//   ROWS_PER_ITER = 8 tokens per iteration. Each of those 8 (warp, half) pairs
-//   keeps its own independent online-softmax state and its own slice of the
-//   output accumulator; they are merged once, at the end, through shared memory.
+// It loses to Triton because q.k is a warp-shuffle reduction on the CUDA cores
+// (~47% SM throughput) rather than an mma (~17%), sitting between a load and
+// its consumer.
 //
-// Register budget per thread: acc[GROUP][VEC] and q[GROUP][VEC] floats (the
-// dominant terms), the softmax scalars, and UNROLL tokens of staged K/V.
-// Measured with Nsight: 128 registers per thread, 16.7% achieved occupancy at
-// batch 1 and 33.2% at batch 32. Both are low, and both are fine -- this kernel
-// reaches 89-96% of DRAM peak anyway, because what hides memory latency here is
-// outstanding loads per thread (the UNROLL below), not resident warps. See
-// README "Occupancy is not the goal", where the 8-warp variant has twice the
-// occupancy and is slightly slower.
-//
-// Where it loses to the Triton kernel: this one computes q.k with a warp-shuffle
-// reduction on the CUDA cores and burns ~47% SM throughput doing it, against
-// Triton's ~17% via an mma. That reduction sits between a load and its consumer.
-//
-// Unlike the Triton kernel, everything here is in natural-log space (expf/logf)
-// rather than log2 space; the CUDA combine kernel below matches it.
+// Natural-log space throughout (expf/logf), unlike the Triton kernel's log2.
 
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
@@ -48,10 +35,8 @@ namespace {
 constexpr int kVec = 8;       // elements per lane: 16 B for fp16, 8 B for int8
 constexpr int kWarpSize = 32;
 
-// The lane layout follows from HEAD_DIM rather than being fixed: head_dim 128
-// gives 16 lanes per row and 2 rows per warp, head_dim 64 gives 8 lanes and 4
-// rows. Everything downstream (the shuffle mask, the number of independent
-// softmax states, the shared-memory reduction) derives from these two.
+// Lane layout derives from HEAD_DIM: 128 -> 16 lanes/row, 2 rows/warp;
+// 64 -> 8 lanes, 4 rows. The shuffle mask and reduction follow from these.
 template <int HEAD_DIM>
 struct LaneLayout {
   static constexpr int threads_per_row = HEAD_DIM / kVec;
@@ -107,9 +92,8 @@ __device__ __forceinline__ void decode_vec<KV_FP16>(
 template <>
 __device__ __forceinline__ void decode_vec<KV_FP8_E5M2>(
     const uint2& raw, float, float (&out)[kVec]) {
-  // e5m2 and fp16 share the 1-5 sign/exponent layout, so widening is a pure
-  // left shift by 8 bits. That is why this path needs no sm_89 cvt instruction
-  // and costs essentially nothing on Ampere.
+  // e5m2 shares fp16's 1-5 sign/exponent layout, so widening is a left shift
+  // by 8 -- no sm_89 cvt needed.
   const uint8_t* b = reinterpret_cast<const uint8_t*>(&raw);
 #pragma unroll
   for (int i = 0; i < kVec; ++i) {
@@ -164,12 +148,10 @@ __global__ __launch_bounds__(WARPS* kWarpSize) void paged_decode_kernel(
   const int lane_in_row = tid % kThreadsPerRow;
   const int state_id = tid / kThreadsPerRow;  // 0 .. ROWS_PER_ITER-1
 
-  // The two row-halves of a warp own different tokens, so when (hi - lo) is not
-  // a multiple of ROWS_PER_ITER one half runs an extra iteration. Reducing with
-  // a full 0xffffffff mask across that divergence is undefined and hangs on
-  // Volta+ independent thread scheduling. The reduction only ever spans the 16
-  // lanes of a single row, which share a trip count exactly, so the mask is the
-  // half-warp this thread belongs to.
+  // Row-halves of a warp own different tokens, so an uneven (hi - lo) gives
+  // them different trip counts. A full 0xffffffff shuffle mask across that
+  // divergence is undefined and hangs on Volta+. Mask to this thread's row,
+  // whose lanes share a trip count exactly.
   constexpr unsigned kRowLanes =
       (kThreadsPerRow == 32) ? 0xffffffffu : ((1u << kThreadsPerRow) - 1u);
   const unsigned row_mask =
@@ -181,7 +163,7 @@ __global__ __launch_bounds__(WARPS* kWarpSize) void paged_decode_kernel(
 
   int lo = 0, hi = seq_len;
   if (SPLIT) {
-    // Split on page boundaries so each CTA's block-table walk stays aligned.
+    // Page-aligned, so each CTA's block-table walk stays aligned.
     const int pages = (seq_len + page_size - 1) >> page_log2;
     const int chunk_pages = (pages + num_splits - 1) / num_splits;
     lo = split * chunk_pages * page_size;
@@ -216,14 +198,10 @@ __global__ __launch_bounds__(WARPS* kWarpSize) void paged_decode_kernel(
   // ---- main loop ------------------------------------------------------------
   // This state owns tokens lo+state_id, +ROWS_PER_ITER, +2*ROWS_PER_ITER, ...
   //
-  // UNROLL matters more than anything else in this kernel. The naive version
-  // issues one K load and one V load, then immediately needs both for the dot
-  // product, so each thread has 2 memory operations in flight and the SM stalls
-  // on DRAM latency it has nothing to hide behind. Issuing UNROLL tokens' worth
-  // of loads *before* touching any of them raises that to 2*UNROLL outstanding
-  // requests per thread, which is what actually converts occupancy into
-  // bandwidth. This is the same thing Triton's num_stages pipelining does for
-  // the Triton kernel, and it is why the un-unrolled version lost to it.
+  // UNROLL is the single biggest lever here. Loading one K/V pair and using it
+  // immediately leaves 2 memory ops in flight per thread and stalls on DRAM
+  // latency; staging UNROLL tokens first raises that to 2*UNROLL. Same effect
+  // as Triton's num_stages pipelining (README section 5.4).
   for (int t0 = lo + state_id; t0 < hi; t0 += ROWS_PER_ITER * UNROLL) {
     int tok_idx[UNROLL];
     bool valid[UNROLL];
@@ -235,8 +213,8 @@ __global__ __launch_bounds__(WARPS* kWarpSize) void paged_decode_kernel(
     for (int u = 0; u < UNROLL; ++u) {
       const int t = t0 + u * ROWS_PER_ITER;
       valid[u] = t < hi;
-      // Clamp rather than branch: every lane of a row agrees on `valid`, and a
-      // clamped in-range address keeps the loads unconditional and coalesced.
+      // Clamp, not branch: lanes of a row agree on `valid`, so this keeps the
+      // loads unconditional and coalesced.
       tok_idx[u] = valid[u] ? t : (hi > 0 ? hi - 1 : 0);
 
       const int t_safe = tok_idx[u];
@@ -263,7 +241,7 @@ __global__ __launch_bounds__(WARPS* kWarpSize) void paged_decode_kernel(
       decode_vec<CODE>(kraw[u], ks[u], kf);
       decode_vec<CODE>(vraw[u], vs[u], vf);
 
-      // q . k, reduced across the 16 lanes that share this row.
+      // q . k, reduced across the lanes sharing this row.
       float dot[GROUP];
 #pragma unroll
       for (int g = 0; g < GROUP; ++g) {
@@ -272,9 +250,8 @@ __global__ __launch_bounds__(WARPS* kWarpSize) void paged_decode_kernel(
         for (int i = 0; i < kVec; ++i) s = fmaf(q_reg[g][i], kf[i], s);
         dot[g] = s;
       }
-      // Unconditional: all 16 lanes of a row share `valid`, so the reduction
-      // never straddles divergence, and masking after the fact is cheaper than
-      // branching around a shuffle.
+      // Unconditional: lanes of a row share `valid`, so the reduction never
+      // straddles divergence and masking after is cheaper than branching.
 #pragma unroll
       for (int off = kThreadsPerRow / 2; off > 0; off >>= 1) {
 #pragma unroll
@@ -283,7 +260,7 @@ __global__ __launch_bounds__(WARPS* kWarpSize) void paged_decode_kernel(
 
       if (!valid[u]) continue;
 
-      // online softmax update (every lane in the row holds identical scalars)
+      // online softmax (every lane in the row holds identical scalars)
 #pragma unroll
       for (int g = 0; g < GROUP; ++g) {
         const float qk = dot[g] * sm_scale;
@@ -330,9 +307,8 @@ __global__ __launch_bounds__(WARPS* kWarpSize) void paged_decode_kernel(
     l_glob[g] = l;
   }
 
-  // Rescale this state's accumulator to the block-global max and sum it in.
-  // 8 contenders per address; shared-memory atomics make this cheaper than a
-  // [8][GROUP][HEAD_DIM] staging buffer, which would cost 16 KB and cut
+  // Rescale to the block-global max and sum in. Shared-memory atomics beat a
+  // [ROWS_PER_ITER][GROUP][HEAD_DIM] staging buffer here: 16 KB and lost
   // occupancy for a reduction that runs once per CTA.
 #pragma unroll
   for (int g = 0; g < GROUP; ++g) {
@@ -425,10 +401,9 @@ __global__ void split_combine_kernel(
           block_tables.data_ptr<int>(), seq_lens.data_ptr<int>(), sm_scale,     \
           page_log2, num_kv_heads, (int)block_tables.stride(0), num_splits)
 
-// The three tuning variants exist only for the benchmark shape (head_dim 128,
-// GQA group 4) -- they are what README section 5.4 A/Bs. Every other shape gets
-// the config that measurement picked there (4 warps, unroll 4); carrying the
-// full matrix for all of them would multiply compile time for no new insight.
+// Three tuning variants for the benchmark shape only (head_dim 128, group 4),
+// which is what README section 5.4 A/Bs. Other shapes get the config that won
+// there (4 warps, unroll 4).
 #define LAUNCH_VARIANTS(HD, GRP, CODE, SPLIT)                  \
   if (HD == 128 && GRP == 4) {                                 \
     switch (variant) {                                         \
@@ -448,9 +423,8 @@ __global__ void split_combine_kernel(
     default: TORCH_CHECK(false, "bad kv_code ", kv_code);                   \
   }
 
-// Supported (head_dim, group) pairs. Anything else raises rather than silently
-// running a wrong specialization -- `supports_shape()` on the Python side is the
-// gate callers should consult first.
+// Supported (head_dim, group) pairs. Anything else raises rather than running
+// a wrong specialization; `supports_shape()` is the Python-side gate.
 #define LAUNCH(SPLIT)                                                         \
   if (head_dim == 128 && group == 4) { LAUNCH_DTYPE(128, 4, SPLIT); }         \
   else if (head_dim == 128 && group == 8) { LAUNCH_DTYPE(128, 8, SPLIT); }    \

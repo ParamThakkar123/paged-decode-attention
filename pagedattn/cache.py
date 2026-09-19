@@ -2,17 +2,14 @@
 
 Layout is vLLM-v1 / FlashInfer "NHD":
 
-    k_cache : [num_blocks, block_size, num_kv_heads, head_dim]
-    v_cache : [num_blocks, block_size, num_kv_heads, head_dim]
+    k_cache, v_cache : [num_blocks, block_size, num_kv_heads, head_dim]
 
-head_dim is the fastest-varying axis, so a single (block, token, head) row is
-`head_dim * elem_bytes` contiguous bytes (256 B in fp16). That is what lets the
-kernels issue fully-coalesced 128-bit loads; see README "Memory coalescing".
+head_dim varies fastest, so a (block, token, head) row is contiguous (256 B in
+fp16) and the kernels issue coalesced 128-bit loads.
 
-The `shuffle` flag on `allocate` controls whether a sequence's logical blocks map
-to ascending physical blocks or to randomly scattered ones. Real servers are
-fragmented after a few minutes of traffic, so `shuffle=True` is the default and
-the sequential case is kept only as a locality-upper-bound reference point.
+`allocate(shuffle=...)` picks scattered or ascending physical blocks. Real
+servers are fragmented, so scattered is the default; sequential is kept only as
+a locality upper bound.
 """
 
 from __future__ import annotations
@@ -27,9 +24,8 @@ from .config import KVDType, ModelShape, torch_dtype
 # quantization helpers
 # ----------------------------------------------------------------------------
 
-# e5m2 has the same 5-bit exponent as fp16, so fp16 -> e5m2 is a pure mantissa
-# truncation and needs no scale factor. That is also why Ampere can convert it
-# back with a shift instead of the SM89 cvt instruction.
+# e5m2 shares fp16's 5-bit exponent, so the conversion is pure mantissa
+# truncation -- no scale factor, and Ampere converts back with a shift.
 FP8_E5M2_MAX = 57344.0
 INT8_MAX = 127.0
 
@@ -92,12 +88,10 @@ class PagedKVCache:
         return int(self.k_cache.shape[0])
 
     def bytes_read_per_decode_step(self) -> int:
-        """Ground-truth KV bytes a *perfect* decode kernel must read.
+        """KV bytes a perfect decode kernel must read.
 
-        This is the denominator of every achieved-bandwidth number we report.
-        We count only the KV actually inside the sequence (not the page-padding
-        tail), because a correct kernel masks those lanes off -- but we do count
-        whole 32 B sectors, since the DRAM cannot deliver less than that.
+        The denominator of every achieved-bandwidth number here. Counts only KV
+        inside the sequence, since a correct kernel masks the page-padding tail.
         """
         n_tok = int(self.seq_lens.sum().item())
         h, d = self.shape.num_kv_heads, self.shape.head_dim
@@ -137,8 +131,7 @@ def allocate(
     h, d = shape.num_kv_heads, shape.head_dim
     store_dtype = torch_dtype(kv_dtype)
 
-    # Fill with a plausible activation distribution, then quantize. Doing it
-    # block-wise keeps the fp16 staging buffer small enough for a 4 GB card.
+    # Block-wise fill, so the fp16 staging buffer fits a 4 GB card.
     k_cache = torch.empty((total_blocks, block_size, h, d), dtype=store_dtype, device=device)
     v_cache = torch.empty_like(k_cache)
     need_scale = kv_dtype == "int8"
@@ -167,7 +160,6 @@ def allocate(
                 src_scale[start:stop] = s
             del raw, q, s
 
-    # Physical block assignment.
     perm = (
         torch.randperm(total_blocks, generator=gen)[: sum(blocks_per_seq)]
         if shuffle
@@ -195,11 +187,10 @@ def allocate(
 def gather_contiguous(cache: PagedKVCache) -> tuple[torch.Tensor, torch.Tensor]:
     """Materialize the paged cache into dense [B, H_kv, S_max, D] fp16 tensors.
 
-    This is what the SDPA / FA2 baselines consume: they have no notion of pages,
-    so somebody has to pay the gather. `bench_decode.py` times this gather
-    separately and reports both the gather-inclusive and gather-exclusive
-    baseline numbers, because which one is "fair" depends on whether you are
-    arguing about kernel quality or about end-to-end serving cost.
+    The dense baselines have no notion of pages, so somebody pays this gather.
+    `bench_decode.py` times it separately and reports both gather-inclusive and
+    gather-exclusive numbers -- which is fair depends on whether the argument is
+    about kernel quality or serving cost.
     """
     b = cache.batch
     s_max = int(cache.seq_lens.max().item())

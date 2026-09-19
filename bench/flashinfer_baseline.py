@@ -1,23 +1,22 @@
-"""FlashInfer paged-decode baseline — the apples-to-apples kernel comparison.
+"""FlashInfer paged-decode baseline.
 
     # inside WSL2, in the cu126 environment (see integration/README.md):
     ~/vllm126/bin/python -m bench.flashinfer_baseline --out results/flashinfer.json
 
-This is the baseline that actually matters: FlashInfer's
-`BatchDecodeWithPagedKVCacheWrapper` is a production paged-KV GQA decode kernel
-solving exactly our problem, unlike PyTorch SDPA which has to be handed a dense,
-head-expanded cache. Losing to it would be informative; beating it would be
-surprising.
+NOTE: unused on this machine. FlashInfer JIT-compiles with `nvcc`, which the
+WSL image does not have (`nvidia-cuda-nvcc-cu12` ships `ptxas` only) and cannot
+install without root. `bench/vllm_kernels_baseline.py` covers the same ground
+with two precompiled paged kernels. Kept because it is correct and runs
+anywhere `nvcc` exists.
 
-FlashInfer describes block tables in CSR form rather than as a dense 2D table:
+FlashInfer takes block tables in CSR form rather than a dense 2D table:
 
     indptr[i]        first index into `indices` belonging to sequence i
     indices[...]     the flat concatenation of every sequence's page ids
     last_page_len[i] how many of the last page's slots are real tokens
 
-`to_flashinfer_layout` converts our `[batch, max_blocks]` table into that, which
-is a pure index rearrangement -- the KV tensors themselves are already in the
-layout FlashInfer wants (NHD), which is the point of having matched it in §2.
+`to_flashinfer_layout` converts ours into that -- a pure index rearrangement,
+since the KV tensors are already in the NHD layout FlashInfer wants.
 """
 
 from __future__ import annotations

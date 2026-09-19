@@ -4,28 +4,26 @@
     cd /mnt/e/Projects/inference_benchmark
     ~/vllm126/bin/python integration/bench_vllm.py --model <hf-id>
 
-    # to compare our attention backend against vLLM's default:
-    ~/vllm126/bin/python integration/bench_vllm.py --model <hf-id> --backend PAGEDATTN_TRITON
+    # to compare our backend against vLLM's default:
+    ~/vllm126/bin/python integration/bench_vllm.py --model <hf-id> --backend ours
 
-Unlike `bench/bench_serving.py`, which times the attention layer inside a
-simulated decode loop, this runs a real model through the real engine. It is the
-number that says whether the kernel is worth anything in a server, as opposed to
-in a microbenchmark.
+`bench/bench_serving.py` times the attention layer in a simulated decode loop;
+this runs a real model through the real engine, which is what says whether the
+kernel is worth anything in a server.
 
 TPOT is measured one of two ways, and the result records which:
 
-  * from vLLM's own per-request metrics, when the build populates them:
+  * vLLM's per-request metrics, when the build populates them:
     `(last_token_time - first_token_time) / (output_tokens - 1)`
-  * otherwise -- vLLM's **V1 engine does not populate `RequestOutput.metrics`** --
-    by a two-point difference: run the same trace generating 1 token, then N,
-    and take `(wall(N) - wall(1)) / (N - 1)`. Prefill, scheduling and
-    tokenization appear in both terms and cancel. This yields one aggregate
-    number rather than a distribution, so p90/p99 are suppressed rather than
-    fabricated from a single sample.
+  * otherwise -- the V1 engine does not populate `RequestOutput.metrics` -- a
+    two-point difference: run the trace for 1 token, then N, and take
+    `(wall(N) - wall(1)) / (N - 1)`. Prefill, scheduling and tokenization
+    cancel. It yields one aggregate number, so p90/p99 are suppressed rather
+    than fabricated from a single sample.
 
-Sizing note for a 4 GB card: the model weights, the CUDA context (~300 MiB) and
-the KV pool all share the card. `--gpu-memory-utilization` is deliberately
-exposed because the usable value here is model-dependent and tight.
+On a 4 GB card the weights, the CUDA context (~300 MiB) and the KV pool share
+the device, so `--gpu-memory-utilization` is exposed: the usable value is
+model-dependent and tight.
 """
 
 from __future__ import annotations
@@ -64,10 +62,10 @@ class Result:
 
 
 def build_trace(n: int, prompt_lo: int, prompt_hi: int, seed: int) -> list[str]:
-    """Synthetic prompts of controlled token-ish length.
+    """Synthetic prompts of controlled length.
 
-    Word-count is a proxy for token count, which is fine here: the point is a
-    spread of prompt lengths so the batch is ragged, not an exact token budget.
+    Word count proxies for token count: the point is a ragged batch, not an
+    exact token budget.
     """
     rng = random.Random(seed)
     vocab = ("the quick brown fox jumps over lazy dogs while carefully "
@@ -84,10 +82,9 @@ def run(args) -> Result:
 
     stats = None
     if args.backend == "ours":
-        # Patch the platform hook *before* the engine is constructed. The V1
-        # engine normally runs in a child process, so the caller must also set
-        # VLLM_ENABLE_V1_MULTIPROCESSING=0 for this to reach the worker; main()
-        # does that.
+        # Must patch before the engine is constructed, and the V1 engine
+        # normally runs in a child process -- main() sets
+        # VLLM_ENABLE_V1_MULTIPROCESSING=0 so this reaches the worker.
         import integration.vllm_backend as vb
         qualname = vb.install()
         stats = vb.STATS
@@ -105,7 +102,7 @@ def run(args) -> Result:
     llm = LLM(**llm_kwargs)
 
     prompts = build_trace(args.requests, args.prompt_lo, args.prompt_hi, args.seed)
-    # Fixed output length: TPOT is only comparable across backends when every
+    # Fixed output length: TPOT only compares across backends when every
     # request decodes the same number of steps.
     params = SamplingParams(temperature=0.0, max_tokens=args.output_tokens,
                             ignore_eos=True)
@@ -149,17 +146,13 @@ def run(args) -> Result:
 
     tpot_source = "per-request metrics"
     if not tpots_ms:
-        # vLLM's V1 engine does not populate RequestOutput.metrics, so isolate
-        # decode from prefill with a two-point measurement instead: run the same
-        # trace generating 1 token, then N, and difference them.
+        # V1 does not populate RequestOutput.metrics, so isolate decode from
+        # prefill by differencing two runs of the same trace:
         #
         #     TPOT = (wall(N) - wall(1)) / (N - 1)
         #
-        # Everything that is not per-decode-step -- prefill, scheduling,
-        # tokenization, engine startup per call -- appears in both terms and
-        # cancels. It yields one aggregate TPOT rather than a distribution, so
-        # the percentiles below collapse to that single value and are reported
-        # as such rather than invented.
+        # Prefill, scheduling and tokenization appear in both terms and cancel.
+        # One aggregate value, so the percentiles below collapse to it.
         tpot_source = "two-point (wall(N) - wall(1)) / (N - 1)"
         params1 = SamplingParams(temperature=0.0, max_tokens=1, ignore_eos=True)
         t1 = time.perf_counter()
@@ -169,8 +162,8 @@ def run(args) -> Result:
         if steps < 1:
             raise RuntimeError("--output-tokens must be >= 2 for the two-point method")
         per_step_s = (wall - wall1) / steps
-        # Per *step*, the batch decodes many sequences at once; TPOT is the
-        # per-token latency a single request sees, which is the step time.
+        # The batch decodes many sequences per step; TPOT is the per-token
+        # latency one request sees, which is the step time.
         tpots_ms = [per_step_s * 1e3]
         print(f"  [two-point] wall(1 tok)={wall1:.2f}s  wall({args.output_tokens} tok)="
               f"{wall:.2f}s  -> {per_step_s*1e3:.2f} ms/step")
@@ -225,10 +218,8 @@ def main() -> None:
     args = ap.parse_args()
 
     import os
-    # Always in-process, for both backends. Our monkeypatch only reaches the
-    # engine when it runs here rather than in a spawned worker -- and running
-    # the baseline the same way is the difference between a comparison and a
-    # confound.
+    # In-process for *both* backends: the monkeypatch only reaches an
+    # in-process engine, and running the baseline any other way is a confound.
     os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
 
     import torch

@@ -8,12 +8,11 @@ Usage
     python -m bench.bench_decode --kv-dtypes fp16,fp8_e5m2,int8
 
 Every row records the VRAM the point needed and whether the KV working set fit
-in L2, so nothing in the results table has to be taken on faith.
+in L2, so no result has to be taken on faith.
 
-Why bandwidth and not FLOPs: single-token decode does 2 * S * D MACs per head
-against 2 * S * D bytes of KV. The arithmetic intensity is under 1 FLOP/byte at
-any context length, so DRAM is the only ceiling that matters and "% of achievable
-bandwidth" is the only efficiency number worth quoting.
+Bandwidth, not FLOPs: decode does 2*S*D MACs per head against 2*S*D bytes of
+KV, so arithmetic intensity is under 1 FLOP/byte at any context length and DRAM
+is the only ceiling that matters.
 """
 
 from __future__ import annotations
@@ -53,10 +52,9 @@ PAGED_IMPLS = [
     "cuda:v3_tuned",  # ablation: 8 warps, 8 loads in flight
     "cuda_nosplit",
 ]
-# Dense baselines, run against gathered contiguous KV.
-# Dense baselines. `sdpa_cudnn` and `sdpa_math` take GQA shapes directly via
-# enable_gqa; `sdpa_memeff` and `sdpa_flash` reject them and need the KV heads
-# physically expanded 8 -> 32 first, which is 4x the memory.
+# Dense baselines, run against gathered contiguous KV. `sdpa_cudnn` and
+# `sdpa_math` take GQA shapes via enable_gqa; the other two reject them and
+# need the KV heads expanded 8 -> 32 first, which is 4x the memory.
 DENSE_IMPLS = ["sdpa_math", "sdpa_cudnn", "sdpa_memeff", "sdpa_flash"]
 NEEDS_HEAD_EXPANSION = {"sdpa_memeff", "sdpa_flash"}
 
@@ -90,9 +88,8 @@ class Row:
 def _free_all() -> None:
     """Best-effort reclaim between sweep points.
 
-    Wrapped because `empty_cache()` itself raises once the context has hit an
-    OOM, and a single unlucky point must not take the whole sweep (and every
-    result already collected) down with it.
+    Wrapped because `empty_cache()` itself raises on a context that has OOMed,
+    and one bad point must not take the whole sweep down with it.
     """
     try:
         gc.collect()
@@ -106,10 +103,9 @@ def _free_all() -> None:
 def _dense_bytes(shape: cfg.ModelShape, batch: int, seqlen: int, expanded: bool) -> int:
     """VRAM the dense baselines need for their contiguous KV.
 
-    The fused SDPA backends reject GQA shapes, so they need the KV heads
-    physically expanded from 8 to 32 -- four times the memory. That is a real
-    property of the baseline, not an artifact of the harness, and it is why they
-    run out of memory at points our paged kernels handle comfortably.
+    The fused SDPA backends reject GQA, so their KV heads are expanded 8 -> 32
+    -- 4x the memory. A property of the baseline, not the harness, and why they
+    OOM at points the paged kernels handle.
     """
     heads = shape.num_q_heads if expanded else shape.num_kv_heads
     kv = 2 * batch * heads * seqlen * shape.head_dim * 2
@@ -123,9 +119,9 @@ def _run_paged(
 ):
     """Return (callable, num_splits) for a paged implementation.
 
-    `out` is preallocated and `num_splits` is precomputed on purpose: both keep
-    the timed closure free of host work and of allocation, which is what a
-    serving runtime does and what CUDA-graph capture requires.
+    `out` preallocated and `num_splits` precomputed keep the timed closure free
+    of host work and allocation -- what a runtime does, and what graph capture
+    requires.
     """
     max_seq = int(c.seq_lens.max().item())
     b = c.batch
@@ -152,12 +148,11 @@ def _run_paged(
 
 def _measure(fn, kv_bytes: int, batch: int, peak_gbs: float,
              allow_graph: bool = True) -> dict:
-    """Time `fn` eagerly and under CUDA-graph replay, and report the better one.
+    """Time `fn` eagerly and under graph replay; report the better one.
 
-    The headline number is the graphed one when capture succeeds, because on
-    WDDM the eager number is dominated by per-launch host overhead that a real
-    serving runtime does not pay. Both are kept, and their difference is the
-    launch-overhead column.
+    Graphed wins when capture succeeds, because the eager number on WDDM is
+    dominated by launch overhead a serving runtime does not pay. Both are kept;
+    the difference is the launch-overhead column.
     """
     eager = bench(fn)["ms"]
 
@@ -171,14 +166,10 @@ def _measure(fn, kv_bytes: int, batch: int, peak_gbs: float,
         res = bench(fn)
         ms_graph = None
 
-    # A captured graph owns a private memory pool that the allocator only gets
-    # back when the graph object dies -- and dropping the reference is not
-    # enough, because the caching allocator keeps the freed blocks reserved.
-    # A full sweep captures several hundred graphs; without the explicit
-    # empty_cache() the reserved pools accumulate until the largest points are
-    # measured under memory pressure. That is not a hypothetical: it silently
-    # turned a 102 %-of-peak point into a 52 % one, which reproduced as 102 %
-    # the moment the point was run on its own.
+    # A captured graph owns a private pool the allocator reclaims only when the
+    # graph dies, and even then keeps the blocks reserved. Over several hundred
+    # captures those pools accumulate until the largest points run under memory
+    # pressure -- this turned a 102 %-of-peak point into a 52 % one.
     graphed = None
     gc.collect()
     torch.cuda.empty_cache()
@@ -217,13 +208,10 @@ def sweep(
 
     for kv_dtype in kv_dtypes:
         for seqlen in seqlens:
-            # Re-measure the ceiling for every context block. This GPU is a 70 W
-            # laptop part: under a long sweep it hits `SW Power Cap: Active` and
-            # its clocks settle lower than when the sweep started. Normalizing a
-            # point measured 20 minutes in against a ceiling measured on a cold
-            # card understates it -- that is not a hypothetical, it turned
-            # genuinely-saturated points into apparent 69-88% ones, which
-            # re-measured at 98%+ when run on their own.
+            # Re-measure the ceiling per context block. This 70 W laptop part
+            # hits `SW Power Cap: Active` during a long sweep and settles at
+            # lower clocks, so a cold-card ceiling understates later points --
+            # it made saturated points look like 69-88%.
             _free_all()
             peak_gbs = measured_peak_gbs_checked()
             print(f"  [ctx {seqlen}] re-measured peak: {peak_gbs:.1f} GB/s", flush=True)
@@ -299,8 +287,8 @@ def sweep(
                 _free_all()
 
                 # ---------------- dense phase --------------------------------
-                # Separate phase so the gathered KV never coexists with the paged
-                # cache; on 4 GB that alone decides whether a point runs.
+                # Separate, so gathered KV never coexists with the paged cache;
+                # on 4 GB that alone decides whether a point runs.
                 if checkpoint is not None:
                     checkpoint(rows)
 
@@ -319,9 +307,8 @@ def _run_dense(dense_impls, shape, batch, seqlen, kv_dtype, block_size, seq_lens
     hq, hkv, d = shape.num_q_heads, shape.num_kv_heads, shape.head_dim
     group = hq // hkv
 
-    # Check before allocating, not after. An OOM mid-capture poisons the CUDA
-    # context badly enough that even empty_cache() then raises, which took out
-    # an entire sweep before this guard existed.
+    # Check before allocating: an OOM mid-capture poisons the context badly
+    # enough that empty_cache() then raises too, which took out a whole sweep.
     need_plain = _dense_bytes(shape, batch, seqlen, expanded=False)
     need_expanded = _dense_bytes(shape, batch, seqlen, expanded=True)
     ceiling = budget.kv_budget_bytes
@@ -364,13 +351,12 @@ def _run_dense(dense_impls, shape, batch, seqlen, kv_dtype, block_size, seq_lens
                 fn = lambda: reference.sdpa_decode(q, k, v, seq_lens, "math")  # noqa: E731
                 extra = 0
             elif impl == "sdpa_cudnn":
-                # Native GQA, no mask, no expansion -- see reference.sdpa_gqa_uniform.
+                # Native GQA, no mask, no expansion.
                 fn = lambda: reference.sdpa_gqa_uniform(q, k, v, "cudnn")  # noqa: E731
                 extra = 0
             else:
-                # The fused SDPA backends reject GQA shapes (see README
-                # "What the Windows baselines can and cannot do"), so the KV must
-                # be physically expanded to 32 heads -- 4x the memory.
+                # These backends reject GQA, so expand the KV heads -- 4x the
+                # memory.
                 if kx is None:
                     kx = k.repeat_interleave(group, dim=1).contiguous()
                     vx = v.repeat_interleave(group, dim=1).contiguous()
@@ -378,8 +364,8 @@ def _run_dense(dense_impls, shape, batch, seqlen, kv_dtype, block_size, seq_lens
                 fn = lambda b=backend: reference.sdpa_decode(q, kx, vx, seq_lens, b)  # noqa: E731
                 extra = 2 * kx.numel() * 2
             fn()
-            # The dense baselines allocate inside the timed region, so a capture
-            # would pin a graph pool per point and never give it back.
+            # These allocate inside the timed region, so a capture would pin a
+            # graph pool per point and never release it.
             m = _measure(fn, kv_bytes, batch, peak_gbs, allow_graph=False)
             extra_note = (f"dense KV; +{extra/2**20:.0f} MiB head expansion"
                           if extra else "dense KV")
@@ -466,9 +452,8 @@ def main() -> None:
         }
 
     def checkpoint(rows: list[Row]) -> None:
-        """Write after every point. A sweep is long and this machine is small;
-        losing 40 minutes of results to one OOM at the last point is not a thing
-        that should be able to happen twice."""
+        """Write after every point, so one OOM at the end cannot cost the whole
+        sweep."""
         out.write_text(json.dumps(payload_for(rows), indent=2), encoding="utf-8")
 
     rows = sweep(batches, seqlens, kv_dtypes, impls, args.block_size,

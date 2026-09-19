@@ -2,21 +2,18 @@
 
     python -m bench.bench_overhead --out results/overhead.json
 
-All four variants are measured in one process, back to back, on the same
-allocations, because per-launch overhead on WDDM varies enough between processes
-that comparing numbers from separate runs is meaningless. The variants are
-cumulative:
+All four run in one process, back to back, on the same allocations: WDDM
+launch overhead varies enough between processes that cross-run numbers are
+meaningless. The variants are cumulative:
 
-  A  sync + alloc  : num_splits=None (forces a `.item()` device sync) and
-                     out=None (allocates the output every call)  -- the naive
-                     wrapper
+  A  sync + alloc  : num_splits=None (a `.item()` device sync) and out=None
+                     (allocates every call) -- the naive wrapper
   B  alloc only    : split count precomputed, output still allocated per call
-  C  neither       : split count precomputed, output preallocated  -- eager,
-                     the best a serving runtime can do without graphs
+  C  neither       : both hoisted -- eager, the best without graphs
   D  CUDA graph    : C captured and replayed
 
-D is what a real serving runtime pays. A is what a straightforward wrapper
-costs. The gap between them is not kernel quality at all.
+D is what a serving runtime pays, A is what a straightforward wrapper costs,
+and the gap between them is not kernel quality at all.
 """
 
 from __future__ import annotations

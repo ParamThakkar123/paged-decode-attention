@@ -104,8 +104,7 @@ def speedup_table(data, target="triton", kv_dtype="fp16") -> str:
                 cells.append("--")
             else:
                 ratio = z["ms"] / t["ms"]
-                # Flag the entries where the baseline is thrashing rather than
-                # merely losing.
+                # Flag baselines that are thrashing, not merely losing.
                 cells.append(f"{ratio:.1f}x" + (" ⚠" if ratio > 100 else ""))
         out.append(f"| {b} | {s:,} | {cells[0]} | {cells[1]} | {t['tok_per_s']:,.0f} |")
     out.append("")

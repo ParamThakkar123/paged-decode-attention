@@ -2,26 +2,18 @@
 
     python -m bench.bench_shapes --out results/shapes.json
 
-The main sweep fixes the shape at Llama-3-8B's and varies batch and context.
-This does the opposite: fixes batch and context and varies the shape, because
-"does it work on the model you actually want to serve" is a different question
-from "how fast is it on the one we tuned for".
+The main sweep fixes the shape and varies batch and context; this does the
+opposite. It also measures, rather than asserts, how the two kernels differ in
+generality: Triton takes group and head_dim as `constexpr` and specializes on
+demand, while the CUDA kernel is instantiated ahead of time for a fixed list
+(`cuda_decode.SUPPORTED_SHAPES`).
 
-It also exists because the Triton and CUDA kernels differ in how general they
-are, and that difference should be measured rather than asserted: the Triton
-kernel takes group and head_dim as `constexpr` and specializes on demand, while
-the CUDA kernel is instantiated ahead of time for a fixed list of
-`(head_dim, group)` pairs (`cuda_decode.SUPPORTED_SHAPES`).
+**Each point runs in its own subprocess.** Freeing the graph pool and calling
+`empty_cache()` between points was not enough -- points measured after others
+read as low as 35 % of peak where running them alone gave 97 %. A fresh CUDA
+context per point costs a few seconds and removes the whole class of error.
 
-**Each point runs in its own subprocess.** Freeing the CUDA-graph pool and
-calling `empty_cache()` between points inside one process was not enough: points
-measured after others still read as low as 35 % of peak where running them alone
-gave 97 %. Rather than keep guessing at allocator state, every measurement gets a
-fresh CUDA context. It costs a few seconds per point and removes an entire class
-of wrong number -- this bit the main sweep twice before it bit this script.
-
-Pass `--one hq,hkv,d,batch` to run a single point (that is what the driver
-spawns); with no `--one`, the driver fans out and aggregates.
+`--one hq,hkv,d,batch` runs a single point; that is what the driver spawns.
 """
 
 from __future__ import annotations
@@ -63,17 +55,16 @@ def _free() -> None:
 def _measure(fn, kv_bytes: int, peak: float, repeats: int = 3) -> dict:
     """Best of `repeats` full measurements.
 
-    `bench()` already takes a median over many reps, but this machine has
-    sporadic multi-second slowdowns that swallow an entire measurement window --
-    the same interference that produced +80 % outliers in the vLLM A/B. Since
-    interference can only ever make a kernel look *slower*, the minimum across
-    independent measurements is the right estimator, not the median of one.
+    `bench()` medians over many reps, but this machine has sporadic stalls that
+    swallow a whole measurement window. Interference can only make a kernel look
+    slower, so the minimum across independent measurements is the right
+    estimator.
     """
     best = None
     for _ in range(repeats):
         graphed, note = try_graph(fn)
         res = bench(graphed if graphed is not None else fn)
-        graphed = None      # release the graph's private memory pool
+        graphed = None      # release the graph's private pool
         _free()
         if best is None or res["ms"] < best[0]:
             best = (res["ms"], note == "")
@@ -88,11 +79,9 @@ def run_one(hq: int, hkv: int, d: int, batch: int, seqlen: int,
             peak: float | None = None) -> dict:
     """One point, in a process of its own. Prints a JSON line on stdout.
 
-    `peak` is supplied by the parent. Letting each child probe the bandwidth
-    ceiling itself looked tidier and was wrong: a child starts while the
-    previous one is still releasing the GPU, so its probe reads low and every
-    "% of peak" computed from it is inflated -- one point came out at 187 % of
-    peak, which is a good reminder that an impossible number is a bug report.
+    `peak` comes from the parent. Letting each child probe it is wrong: a child
+    starts while the previous one is still releasing the GPU, so the probe reads
+    low and every "% of peak" is inflated -- one point reported 187 %.
     """
     sm = torch.cuda.get_device_properties(0).multi_processor_count
     if peak is None:
@@ -140,7 +129,7 @@ def main() -> None:
     import subprocess
     import time
 
-    # Probe the ceiling once, here, with the GPU idle.
+    # Probe the ceiling once, with the GPU idle.
     peak = measured_peak_gbs_checked()
     print(f"measured peak {peak:.1f} GB/s")
 
@@ -153,7 +142,7 @@ def main() -> None:
     rows = []
     for hq, hkv, d, name in SHAPES:
         for batch in [int(x) for x in args.batches.split(",") if x]:
-            time.sleep(2.0)   # let the previous child fully release the GPU
+            time.sleep(2.0)   # let the previous child release the GPU
             res = subprocess.run(
                 [sys.executable, "-m", "bench.bench_shapes",
                  "--one", f"{hq},{hkv},{d},{batch}", "--seqlen", str(args.seqlen),

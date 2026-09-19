@@ -4,19 +4,16 @@
     cd /mnt/e/Projects/inference_benchmark
     ~/vllm126/bin/python -m bench.vllm_kernels_baseline --out results/vllm_kernels.json
 
-Two baselines, both of which are the real thing rather than a dense stand-in:
+Two real paged baselines, not dense stand-ins:
 
-  **FA2 paged decode** — `vllm_flash_attn.flash_attn_with_kvcache`, which is
-  FlashAttention-2's paged-KV decode path. It consumes
-  `[num_blocks, page_size, num_kv_heads, head_dim]` and a dense
-  `[batch, max_blocks]` block table, i.e. *exactly* our layout, so there is no
-  conversion and no conversion cost to argue about. This is the FA2 comparison
-  that native Windows cannot run at all.
+  **FA2 paged decode** -- `vllm_flash_attn.flash_attn_with_kvcache`. It takes
+  `[num_blocks, page_size, num_kv_heads, head_dim]` and a dense block table,
+  exactly our layout, so there is no conversion cost to argue about.
 
-  **vLLM PagedAttention** — `vllm._custom_ops.paged_attention_v1/v2`, the V0
-  kernel. It wants a different cache layout (K split into an `x`-vectorized
-  minor axis, V transposed), so `_to_vllm_v0_layout` repacks once, outside the
-  timed region. Repacking per call would be benchmarking a memcpy.
+  **vLLM PagedAttention** -- `vllm._custom_ops.paged_attention_v1/v2`, the V0
+  kernel. It wants K vectorized on an `x` minor axis and V transposed, so
+  `_to_vllm_v0_layout` repacks once outside the timed region; repacking per
+  call would benchmark a memcpy.
 
 Both are chosen over FlashInfer for one practical reason: they are compiled into
 the vLLM wheel, whereas FlashInfer JIT-compiles with `nvcc`, and this WSL install

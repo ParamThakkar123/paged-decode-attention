@@ -76,9 +76,9 @@ class VRamBudget:
     """Decides which (batch, seqlen) points are runnable on this GPU."""
 
     total_bytes: int
-    # Fraction of *total* VRAM we allow the KV cache to occupy. The rest pays
-    # for the torch CUDA context (~250 MB), the cuBLAS/cuDNN workspaces, the
-    # Q/O tensors, the split-KV workspace and the SDPA baseline's own buffers.
+    # Fraction of total VRAM the KV cache may occupy. The rest pays for the
+    # CUDA context (~250 MB), cuBLAS/cuDNN workspaces, Q/O, the split-KV
+    # workspace and the SDPA baselines' buffers.
     kv_fraction: float = 0.55
 
     @classmethod

@@ -1,24 +1,19 @@
 """Paged-KV GQA decode attention in Triton.
 
-One kernel, three constexpr switches, so every optimization claim in the README
-is an A/B against the *same* code path rather than against a different kernel:
+Three constexpr switches on one kernel, so each README A/B compares the same
+code path:
 
   PER_PAGE_BT : load the block table once per page instead of once per token.
   SPLIT_KV    : partition the KV range across CTAs (FlashDecoding), then reduce.
   KV_DTYPE    : 0 = fp16, 1 = fp8_e5m2, 2 = int8 with per-(token,head) scales.
 
-Parallelization: one program per (batch, kv_head[, split]). All GQA_GROUP query
-heads that share a KV head are handled by the same program, so each K/V byte is
-read from DRAM once and reused `group` times out of registers. That reuse is the
-whole point of GQA for decode, and it is why the achieved-bandwidth numbers in
-the README are computed against KV bytes rather than against Q*K flops.
+One program per (batch, kv_head[, split]). All GQA_GROUP query heads sharing a
+KV head run in the same program, so each K/V byte is read once and reused
+`group` times from registers -- hence bandwidth is measured against KV bytes.
 
-The query tile is padded from GQA_GROUP (4 for Llama-3-8B) up to 16 because
-`tl.dot` requires M >= 16. That wastes 4x of the tensor-core issue slots, and
-Nsight confirms it costs nothing: at batch 32 / context 4k this kernel runs at
-97.6% of DRAM peak with the tensor pipe only 14.5% busy and overall SM
-throughput at 17.5%. There is nothing to reclaim by unpadding -- the memory
-system is the wall.
+The query tile is padded up to 16 because `tl.dot` requires M >= 16. Nsight says
+the wasted tensor-core slots cost nothing: 97.6% of DRAM peak with the tensor
+pipe 14.5% busy (README section 5.5).
 """
 
 from __future__ import annotations
@@ -81,8 +76,7 @@ def _paged_decode_kernel(
 
     # ---- KV range owned by this program ------------------------------------
     if SPLIT_KV:
-        # Chunk boundaries are BLOCK_N-aligned so every program's inner loop
-        # keeps the same tile shape and the tail mask stays cheap.
+        # BLOCK_N-aligned so every program's inner loop keeps one tile shape.
         chunk = tl.cdiv(tl.cdiv(seq_len, BLOCK_N), num_splits) * BLOCK_N
         lo = pid_s * chunk
         hi = tl.minimum(lo + chunk, seq_len)
@@ -107,7 +101,7 @@ def _paged_decode_kernel(
 
     qk_scale = sm_scale * LOG2E
 
-    # An empty range happens when seq_len is short relative to num_splits.
+    # Empty when seq_len is short relative to num_splits.
     if lo < hi:
         for start_n in tl.range(lo, hi, BLOCK_N):
             offs_n = start_n + tl.arange(0, BLOCK_N)
@@ -115,9 +109,8 @@ def _paged_decode_kernel(
 
             # ---- paged address computation ---------------------------------
             if PER_PAGE_BT:
-                # BLOCK_N spans BLOCK_N/PAGE pages. Load one block-table entry
-                # per page and broadcast it across the page's tokens, instead of
-                # issuing BLOCK_N redundant loads that only L1 saves us from.
+                # One block-table load per page, broadcast across its tokens,
+                # instead of BLOCK_N redundant loads served by L1.
                 offs_p = tl.arange(0, BLOCK_N // PAGE)
                 page_id = (start_n // PAGE) + offs_p
                 p_mask = (page_id * PAGE) < hi
@@ -257,10 +250,9 @@ def pick_num_splits(
 ) -> int:
     """How many KV splits before the GPU stops being starved.
 
-    At batch=1 the un-split kernel launches only num_kv_heads=8 CTAs, which on a
-    16-SM card leaves half the GPU idle no matter how long the context is. We
-    split until we have ~2 CTAs per SM, but never so far that a split covers
-    fewer than 2 BLOCK_N tiles (the fixed per-CTA cost stops paying for itself).
+    Unsplit, batch=1 launches only num_kv_heads CTAs -- half a 16-SM card idle.
+    Split toward ~2 CTAs per SM, but never below 2 BLOCK_N tiles per split,
+    where the fixed per-CTA cost stops paying for itself.
     """
     base_ctas = batch * num_kv_heads
     if base_ctas >= 2 * sm_count:
@@ -303,9 +295,8 @@ def paged_decode_triton(
 ) -> torch.Tensor:
     """Paged GQA decode attention. q: [B, Hq, D] fp16 -> [B, Hq, D] fp16.
 
-    `sm_scale` overrides the default 1/sqrt(head_dim). A serving runtime supplies
-    its own scale (it may fold in other factors), so it must not be re-derived
-    here from the shape.
+    `sm_scale` overrides the default 1/sqrt(head_dim); a serving runtime may fold
+    other factors in, so it must not be re-derived from the shape here.
     """
     b, hq, d = q.shape
     shape = cache.shape
@@ -327,10 +318,9 @@ def paged_decode_triton(
         stride_sn = stride_st = 0
 
     if num_splits is None:
-        # `.item()` is a full device sync. On Windows WDDM that costs hundreds of
-        # microseconds -- more than the kernel itself below batch 8 -- so it must
-        # never run when the caller already knows the split count. A serving
-        # runtime computes splits once per step, not once per layer.
+        # `.item()` is a full device sync -- hundreds of us on WDDM, more than
+        # the kernel below batch 8. Callers that know the split count must pass
+        # it (README section 5.1).
         max_seq = int(cache.seq_lens.max().item())
         sm = torch.cuda.get_device_properties(q.device).multi_processor_count
         num_splits = pick_num_splits(b, hkv, max_seq, sm, block_n)

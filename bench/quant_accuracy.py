@@ -2,19 +2,15 @@
 
     python -m bench.quant_accuracy --out results/quant_accuracy.json
 
-This is the number that decides whether a quantized cache is usable, and it is
-deliberately separate from the kernel correctness tests: those compare a kernel
-against an fp32 reference reading *the same* quantized cache, so quantization
-error cancels and what is measured is the kernel. Here the fp16 cache is the
-reference and the quantized caches are the thing under test.
+Separate from the correctness tests on purpose: those compare a kernel against
+a reference reading the *same* quantized cache, so quantization error cancels.
+Here the fp16 cache is the reference and the quantized ones are under test.
 
-Both caches are built from the same RNG seed, so they hold the same underlying
-values and the only difference is the storage format.
+Both are built from the same RNG seed, so the only difference is storage format.
 
-Reported as relative error against the fp16 result: max over all elements (the
-worst case a token can see) and RMS (what the distribution actually looks like),
-because a single outlier and a systematic shift mean very different things for
-generation quality.
+Reported as relative error against fp16: max (the worst case a token sees) and
+RMS (what the distribution looks like), because one outlier and a systematic
+shift mean different things for generation quality.
 """
 
 from __future__ import annotations

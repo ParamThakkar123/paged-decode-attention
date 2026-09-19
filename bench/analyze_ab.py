@@ -2,22 +2,19 @@
 
     python bench/analyze_ab.py
 
-`integration/run_ab.sh` writes alternating runs into two files: one with the
-default backend first in each pair, one with ours first. This reads both,
-pairs adjacent runs, and reports the median paired difference.
+`integration/run_ab.sh` writes alternating runs into two files, one with each
+backend going first. This pairs adjacent runs and reports the median paired
+difference.
 
-Two things it does deliberately:
+*Pairs, not pooled means*: each pair ran back to back on the same GPU state, so
+the within-pair difference cancels drift.
 
-*Pairs, not pooled means.* Each pair ran back to back on the same GPU state, so
-the within-pair difference cancels drift that a pooled mean would not.
+*Both orderings*: the second backend in a pair sees a warmer GPU, so equal
+numbers of pairs each way cancel that bias.
 
-*Both orderings.* The second backend in a pair always sees a warmer GPU. Running
-the same number of pairs each way cancels that bias instead of baking it in.
-
-It also reports the result twice -- with and without runs slower than 2x the
-global median. This machine has sporadic multi-second stalls that swallow an
-entire run, and hiding an outlier without saying so is how a benchmark starts
-lying. Both numbers are printed; if they disagree, the honest answer is that the
+The result is printed twice, with and without runs slower than 2x the global
+median -- this machine has stalls that swallow whole runs, and dropping an
+outlier silently is how a benchmark starts lying. If the two disagree, the
 measurement did not resolve the difference.
 """
 

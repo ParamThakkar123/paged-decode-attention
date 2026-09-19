@@ -1,8 +1,7 @@
 """Reference decode attention + the PyTorch/FA2 baselines.
 
-`reference_decode` is deliberately slow and obvious: fp32 math, explicit gather,
-no fusion. It is the ground truth that `tests/test_correctness.py` compares every
-kernel against.
+`reference_decode` is deliberately slow and obvious -- fp32, explicit gather, no
+fusion -- and is the ground truth every kernel is tested against.
 """
 
 from __future__ import annotations
@@ -12,11 +11,9 @@ import torch.nn.functional as F
 
 from .cache import PagedKVCache, gather_contiguous
 
-# PyTorch ships the cuDNN SDPA backend *runtime-disabled* on this build, so it
-# reports "cuDNN attention has been runtime disabled" and silently never runs.
-# Turning it on is worth the line: unlike the mem-efficient backend it accepts
-# GQA shapes directly via `enable_gqa`, so it is the only fused baseline here
-# that does not need the KV heads physically expanded 8 -> 32 first.
+# PyTorch ships the cuDNN SDPA backend runtime-disabled, so it silently never
+# runs. Worth enabling: it is the only fused baseline that takes GQA shapes via
+# `enable_gqa`, without expanding the KV heads 8 -> 32.
 if torch.cuda.is_available() and hasattr(torch.backends.cuda, "enable_cudnn_sdp"):
     torch.backends.cuda.enable_cudnn_sdp(True)
 
@@ -81,13 +78,12 @@ def sdpa_gqa_uniform(
     v: torch.Tensor,
     backend: str = "cudnn",
 ) -> torch.Tensor:
-    """Fused GQA decode with no attention mask and no KV-head expansion.
+    """Fused GQA decode, no attention mask, no KV-head expansion.
 
-    The cuDNN backend rejects an arbitrary `attn_mask`, so this path drops it --
-    which is only correct when every sequence in the batch has the same length,
-    i.e. exactly the sweep's configuration. `enable_gqa=True` means the KV stays
-    at 8 heads, so unlike the mem-efficient baseline this one does not pay 4x
-    the KV memory to be callable at all.
+    cuDNN rejects an arbitrary `attn_mask`, so this drops it -- correct only for
+    uniform sequence lengths, which is every sweep point. `enable_gqa=True`
+    keeps the KV at 8 heads, so unlike the mem-efficient baseline it does not
+    pay 4x the KV memory to be callable.
 
     q: [B, Hq, D], k/v: [B, Hkv, S, D] -> [B, Hq, D].
     """
@@ -119,12 +115,10 @@ def sdpa_flash_varlen(
 ) -> torch.Tensor:
     """FlashAttention-2 path.
 
-    PyTorch's FLASH_ATTENTION SDPA backend *is* FlashAttention-2 (the upstream
-    kernels are vendored into ATen), which is how we get an FA2 baseline without
-    the flash-attn package -- it has no Windows wheels. FA2 cannot take an
-    arbitrary attn_mask, so ragged batches are run with is_causal=False and a
-    right-padded KV; we therefore only use this path when all sequences in the
-    batch have equal length, which is the case for every sweep point.
+    PyTorch's FLASH_ATTENTION backend is FA2 vendored into ATen, which gives an
+    FA2 baseline without the flash-attn package (no Windows wheels). It cannot
+    take an arbitrary attn_mask, so this path requires uniform sequence lengths
+    -- true for every sweep point.
     """
     assert int(seq_lens.min()) == int(seq_lens.max()), "FA2 path needs uniform seq_lens"
     hq, hkv = q.shape[1], k.shape[1]

@@ -1,28 +1,21 @@
-"""Continuous-batching decode loop: block allocator, scheduler, CUDA-graph runner.
+"""Continuous-batching decode loop: block allocator, scheduler, graph runner.
 
-This is the serving layer the kernel actually has to live in. It exists because
-a microbenchmark on a fixed (batch, context) rectangle answers the wrong
-question: real decode batches are ragged, they grow by one token every step,
-sequences finish and are replaced at different times, and the physical blocks
-they leave behind are reused by whoever arrives next. All four of those change
-what the kernel sees.
+A microbenchmark on a fixed (batch, context) rectangle answers the wrong
+question. Real decode batches are ragged, grow a token per step, retire and
+refill at different times, and reuse the blocks the retired ones left behind --
+all four change what the kernel sees.
 
-Three pieces:
+  BlockAllocator  - free list over physical KV pages. LIFO, which is what makes
+                    a long-running server's block tables fragmented.
+  Scheduler       - admits sequences up to a batch and KV budget, grows the
+                    running ones each step, retires finished ones.
+  DecodeRunner    - static buffers plus one CUDA graph per batch bucket.
 
-  BlockAllocator  - a free list over physical KV pages. Allocation is LIFO,
-                    which is what makes a long-running server's block tables
-                    fragmented rather than sequential.
-  Scheduler       - admits new sequences up to a batch and KV budget, grows the
-                    running ones by one token per step, retires finished ones.
-  DecodeRunner    - static buffers plus one CUDA graph per batch bucket, which
-                    is how a serving runtime avoids paying launch overhead on
-                    every layer of every step.
-
-The CUDA-graph part is the subtle one. A graph bakes in shapes, pointers and
-grid dimensions -- but not tensor *contents*. So the block table and the sequence
-lengths can change every step as long as they are written in place into the same
-buffers, and only the batch size has to be bucketed. That is exactly the trick
-vLLM uses, and it is why `seq_lens` lives on the GPU and is never read back.
+The graph part is the subtle one: a graph bakes in shapes, pointers and grid
+dimensions but not tensor *contents*, so the block table and sequence lengths
+can change every step as long as they are written in place. Only batch size has
+to be bucketed. That is vLLM's trick, and it is why `seq_lens` lives on the GPU
+and is never read back.
 """
 
 from __future__ import annotations
@@ -46,8 +39,8 @@ class BlockAllocator:
 
     def __init__(self, num_blocks: int) -> None:
         self.num_blocks = num_blocks
-        # Reversed so the first pops are low indices; after a few rounds of
-        # alloc/free the order is genuinely scrambled, like a warm server.
+        # Reversed so the first pops are low indices; a few alloc/free rounds
+        # then scramble it, like a warm server.
         self._free: list[int] = list(range(num_blocks - 1, -1, -1))
 
     @property
@@ -109,9 +102,8 @@ class Scheduler:
         while len(self.running) < self.max_batch:
             plen = self.prompt_lens()
             glen = self.gen_lens()
-            # Reserve the whole generation up front. A real scheduler allocates
-            # lazily and may preempt; reserving is the conservative choice and
-            # keeps this loop free of preemption, which is a different project.
+            # Reserve the whole generation up front. A real scheduler would
+            # allocate lazily and preempt; that is a different project.
             need = self._blocks_for(plen + glen)
             if need > self.alloc.num_free:
                 self.rejected += 1
@@ -157,8 +149,8 @@ class DecodeRunner:
         self.v_cache = torch.zeros_like(self.k_cache)
         self.block_table = torch.zeros((max_batch, max_blocks_per_seq),
                                        dtype=torch.int32, device=device)
-        # Padded slots get seq_len 1, not 0: one token of work is trivial and
-        # keeps every sequence's softmax denominator non-zero.
+        # Padded slots get seq_len 1, not 0, to keep every softmax denominator
+        # non-zero for trivial cost.
         self.seq_lens = torch.ones((max_batch,), dtype=torch.int32, device=device)
         self.q = torch.randn((max_batch, shape.num_q_heads, d),
                              dtype=torch.float16, device=device)
@@ -209,7 +201,7 @@ class DecodeRunner:
             lens[i] = min(s.seq_len, nb * self.block_size)
         self.block_table[:n].copy_(bt, non_blocking=True)
         self.seq_lens[:n].copy_(lens, non_blocking=True)
-        # Padding slots: one token, pointing at block 0, so they are cheap and safe.
+        # Padding: one token at block 0 -- cheap and safe.
         if n < self.max_batch:
             self.seq_lens[n:].fill_(1)
 

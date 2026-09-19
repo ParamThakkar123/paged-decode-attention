@@ -2,15 +2,12 @@
 
     python bench/check_readme.py
 
-A README is a cache of numbers that live somewhere else, and caches go stale.
-This one went stale twice during development -- a test count that stopped
-matching the suite, and a vLLM TPOT that survived a change to how the two
-backends were launched. Both read as perfectly credible.
+A README is a cache of numbers that live elsewhere, and this one went stale
+twice: a test count that stopped matching the suite, and a TPOT that survived a
+change to how the backends were launched. Both read as credible.
 
-So the claims are checked mechanically instead: each entry below recomputes a
-number from its source file and compares it to what the README says, and the
-last few assert that specific superseded strings are *absent*. It exits non-zero
-on any mismatch, which is the only way this stays true after the next re-run.
+So each entry recomputes a number from its source and compares, and the last
+few assert that superseded strings are absent. Exits non-zero on any mismatch.
 """
 
 from __future__ import annotations
