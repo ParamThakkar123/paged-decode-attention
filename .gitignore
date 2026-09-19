@@ -1,0 +1,13 @@
+build/
+__pycache__/
+*.pyc
+.pytest_cache/
+.benchmarks/
+
+# Profiler captures are large (16 MB) and only open in the Nsight GUI. The
+# committed .txt / .csv exports next to them, plus results/NCU.md, carry every
+# number the README quotes; regenerate the captures with profiling/run_ncu.ps1
+# and run_nsys.ps1 if you want the interactive views.
+*.ncu-rep
+*.nsys-rep
+*.sqlite

@@ -1,0 +1,297 @@
+{
+  "gpu": {
+    "name": "NVIDIA GeForce RTX 3050 Laptop GPU",
+    "sm_count": 16,
+    "capability": "8.6",
+    "total_vram_gb": 4.0,
+    "torch": "2.12.0+cu126",
+    "torch_cuda": "12.6",
+    "driver_cuda": "561.19"
+  },
+  "peak_read_gbs_measured": 178.35958307871712,
+  "seqlen": 4096,
+  "cuda_supported_shapes": [
+    [
+      64,
+      4
+    ],
+    [
+      64,
+      7
+    ],
+    [
+      64,
+      8
+    ],
+    [
+      128,
+      4
+    ],
+    [
+      128,
+      8
+    ]
+  ],
+  "rows": [
+    {
+      "num_q_heads": 32,
+      "num_kv_heads": 8,
+      "head_dim": 128,
+      "group": 4,
+      "batch": 8,
+      "seqlen": 4096,
+      "kv_bytes": 134217728,
+      "num_splits": 1,
+      "peak_gbs": 178.35958307871712,
+      "triton": {
+        "ms": 0.74726402759552,
+        "gbs": 179.61218932466736,
+        "pct_peak": 100.70229265191621,
+        "graphed": true,
+        "repeats": 3
+      },
+      "cuda": {
+        "ms": 0.7761920094490051,
+        "gbs": 172.9182036997225,
+        "pct_peak": 96.94920828751145,
+        "graphed": true,
+        "repeats": 3
+      },
+      "model": "Llama-3-8B"
+    },
+    {
+      "num_q_heads": 32,
+      "num_kv_heads": 8,
+      "head_dim": 128,
+      "group": 4,
+      "batch": 32,
+      "seqlen": 4096,
+      "kv_bytes": 536870912,
+      "num_splits": 1,
+      "peak_gbs": 178.35958307871712,
+      "triton": {
+        "ms": 2.9368319511413574,
+        "gbs": 182.8061397218703,
+        "pct_peak": 102.49302928746515,
+        "graphed": true,
+        "repeats": 3
+      },
+      "cuda": {
+        "ms": 3.01363205909729,
+        "gbs": 178.1474650760171,
+        "pct_peak": 99.88107283105366,
+        "graphed": true,
+        "repeats": 3
+      },
+      "model": "Llama-3-8B"
+    },
+    {
+      "num_q_heads": 64,
+      "num_kv_heads": 8,
+      "head_dim": 128,
+      "group": 8,
+      "batch": 8,
+      "seqlen": 4096,
+      "kv_bytes": 134217728,
+      "num_splits": 1,
+      "peak_gbs": 178.35958307871712,
+      "triton": {
+        "ms": 0.7462800145149231,
+        "gbs": 179.84901831685875,
+        "pct_peak": 100.83507441115978,
+        "graphed": true,
+        "repeats": 3
+      },
+      "cuda": {
+        "ms": 0.8890080153942108,
+        "gbs": 150.9747107741027,
+        "pct_peak": 84.64625683021,
+        "graphed": true,
+        "repeats": 3
+      },
+      "model": "Llama-3-70B"
+    },
+    {
+      "num_q_heads": 64,
+      "num_kv_heads": 8,
+      "head_dim": 128,
+      "group": 8,
+      "batch": 32,
+      "seqlen": 4096,
+      "kv_bytes": 536870912,
+      "num_splits": 1,
+      "peak_gbs": 178.35958307871712,
+      "triton": {
+        "ms": 2.9409279823303223,
+        "gbs": 182.55153313023195,
+        "pct_peak": 102.35028024800033,
+        "graphed": true,
+        "repeats": 3
+      },
+      "cuda": {
+        "ms": 3.6790881156921387,
+        "gbs": 145.9249942153124,
+        "pct_peak": 81.81505680628888,
+        "graphed": true,
+        "repeats": 3
+      },
+      "model": "Llama-3-70B"
+    },
+    {
+      "num_q_heads": 32,
+      "num_kv_heads": 8,
+      "head_dim": 64,
+      "group": 4,
+      "batch": 8,
+      "seqlen": 4096,
+      "kv_bytes": 67108864,
+      "num_splits": 1,
+      "peak_gbs": 178.35958307871712,
+      "triton": {
+        "ms": 0.3708928108215332,
+        "gbs": 180.93870261694437,
+        "pct_peak": 101.44602240805249,
+        "graphed": true,
+        "repeats": 3
+      },
+      "cuda": {
+        "ms": 0.4055039882659912,
+        "gbs": 165.49495428385234,
+        "pct_peak": 92.78725114019407,
+        "graphed": true,
+        "repeats": 3
+      },
+      "model": "Llama-3.2-1B"
+    },
+    {
+      "num_q_heads": 32,
+      "num_kv_heads": 8,
+      "head_dim": 64,
+      "group": 4,
+      "batch": 32,
+      "seqlen": 4096,
+      "kv_bytes": 268435456,
+      "num_splits": 1,
+      "peak_gbs": 178.35958307871712,
+      "triton": {
+        "ms": 1.5052800178527832,
+        "gbs": 178.32924958567614,
+        "pct_peak": 99.98299306798246,
+        "graphed": true,
+        "repeats": 3
+      },
+      "cuda": {
+        "ms": 1.5641599893569946,
+        "gbs": 171.6163677798396,
+        "pct_peak": 96.21931427373798,
+        "graphed": true,
+        "repeats": 3
+      },
+      "model": "Llama-3.2-1B"
+    },
+    {
+      "num_q_heads": 14,
+      "num_kv_heads": 2,
+      "head_dim": 64,
+      "group": 7,
+      "batch": 8,
+      "seqlen": 4096,
+      "kv_bytes": 16777216,
+      "num_splits": 2,
+      "peak_gbs": 178.35958307871712,
+      "triton": {
+        "ms": 0.09733389553270841,
+        "gbs": 172.3676619350155,
+        "pct_peak": 96.64053871383118,
+        "graphed": true,
+        "repeats": 3
+      },
+      "cuda": {
+        "ms": 0.1492283069170438,
+        "gbs": 112.42649834073688,
+        "pct_peak": 63.033618042894076,
+        "graphed": true,
+        "repeats": 3
+      },
+      "model": "Qwen2.5-0.5B"
+    },
+    {
+      "num_q_heads": 14,
+      "num_kv_heads": 2,
+      "head_dim": 64,
+      "group": 7,
+      "batch": 32,
+      "seqlen": 4096,
+      "kv_bytes": 67108864,
+      "num_splits": 1,
+      "peak_gbs": 178.35958307871712,
+      "triton": {
+        "ms": 0.3713023900985718,
+        "gbs": 180.73911127311683,
+        "pct_peak": 101.33411850001328,
+        "graphed": true,
+        "repeats": 3
+      },
+      "cuda": {
+        "ms": 0.46314001083374023,
+        "gbs": 144.89973319124655,
+        "pct_peak": 81.24022869424212,
+        "graphed": true,
+        "repeats": 3
+      },
+      "model": "Qwen2.5-0.5B"
+    },
+    {
+      "num_q_heads": 16,
+      "num_kv_heads": 2,
+      "head_dim": 64,
+      "group": 8,
+      "batch": 8,
+      "seqlen": 4096,
+      "kv_bytes": 16777216,
+      "num_splits": 2,
+      "peak_gbs": 178.35958307871712,
+      "triton": {
+        "ms": 0.09851957622327302,
+        "gbs": 170.2932213388547,
+        "pct_peak": 95.47747219374111,
+        "graphed": true,
+        "repeats": 3
+      },
+      "cuda": {
+        "ms": 0.15402666727701822,
+        "gbs": 108.92409929136517,
+        "pct_peak": 61.069945001661424,
+        "graphed": true,
+        "repeats": 3
+      },
+      "model": "Qwen2.5-3B-ish"
+    },
+    {
+      "num_q_heads": 16,
+      "num_kv_heads": 2,
+      "head_dim": 64,
+      "group": 8,
+      "batch": 32,
+      "seqlen": 4096,
+      "kv_bytes": 67108864,
+      "num_splits": 1,
+      "peak_gbs": 178.35958307871712,
+      "triton": {
+        "ms": 0.37109758853912356,
+        "gbs": 180.8388576821079,
+        "pct_peak": 101.39004283402961,
+        "graphed": true,
+        "repeats": 3
+      },
+      "cuda": {
+        "ms": 0.48098400235176086,
+        "gbs": 139.52410822786757,
+        "pct_peak": 78.2263031901628,
+        "graphed": true,
+        "repeats": 3
+      },
+      "model": "Qwen2.5-3B-ish"
+    }
+  ]
+}

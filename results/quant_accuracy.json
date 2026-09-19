@@ -1,0 +1,49 @@
+{
+  "gpu": {
+    "name": "NVIDIA GeForce RTX 3050 Laptop GPU",
+    "sm_count": 16,
+    "capability": "8.6",
+    "total_vram_gb": 4.0,
+    "torch": "2.12.0+cu126",
+    "torch_cuda": "12.6",
+    "driver_cuda": "561.19"
+  },
+  "rows": [
+    {
+      "kv_dtype": "fp8_e5m2",
+      "batch": 2,
+      "seqlen": 2048,
+      "bytes_per_token_per_layer": 2048.0,
+      "max_rel_err": 0.08156271278858185,
+      "rms_rel_err": 0.0526973158121109,
+      "min_cosine_similarity": 0.9953453540802002
+    },
+    {
+      "kv_dtype": "int8",
+      "batch": 2,
+      "seqlen": 2048,
+      "bytes_per_token_per_layer": 2080.0,
+      "max_rel_err": 0.004112405702471733,
+      "rms_rel_err": 0.00638724397867918,
+      "min_cosine_similarity": 0.9999410510063171
+    },
+    {
+      "kv_dtype": "fp8_e5m2",
+      "batch": 2,
+      "seqlen": 8192,
+      "bytes_per_token_per_layer": 2048.0,
+      "max_rel_err": 0.06475259363651276,
+      "rms_rel_err": 0.05441715195775032,
+      "min_cosine_similarity": 0.9955109357833862
+    },
+    {
+      "kv_dtype": "int8",
+      "batch": 2,
+      "seqlen": 8192,
+      "bytes_per_token_per_layer": 2080.0,
+      "max_rel_err": 0.003970677964389324,
+      "rms_rel_err": 0.006659896578639746,
+      "min_cosine_similarity": 0.9999330043792725
+    }
+  ]
+}
