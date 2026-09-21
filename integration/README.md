@@ -9,7 +9,7 @@ serves every decode step; `bench_vllm.py` verifies this by counting calls and
               24 calls delegated to vLLM (prefill and non-decode batches)
 
 2,280 = 24 layers x 95 decode steps, and the 24 delegated calls are the single
-prefill pass, one per layer — exactly the split the design intends.
+prefill pass, one per layer - exactly the split the design intends.
 
 ## Why this is not on the main platform
 
@@ -25,10 +25,10 @@ python3 -m venv ~/vllmenv
 ```
 
 (If you cannot use `sudo`, `python3 -m venv --without-pip ~/vllmenv` followed by
-the official `get-pip.py` bootstrap works and is what this repo used — Ubuntu's
+the official `get-pip.py` bootstrap works and is what this repo used - Ubuntu's
 `ensurepip` is missing without the `python3.10-venv` package.)
 
-### The driver trap — read this before installing
+### The driver trap - read this before installing
 
 `pip install vllm` on this machine produces an install that imports cleanly and
 cannot run a single kernel:
@@ -40,7 +40,7 @@ RuntimeError: The NVIDIA driver on your system is too old (found version 12060)
 
 Current vLLM pins **torch 2.13+cu130**, which needs a CUDA 13 driver. This
 laptop's driver is 561.19 = **CUDA 12.6**. `torch.cuda.is_available()` returning
-False is easy to miss if you only check that the import succeeded — it is worth
+False is easy to miss if you only check that the import succeeded - it is worth
 running an actual `x @ x` on the device before trusting the environment.
 
 Pin a vLLM release built against cu126 instead. `vllm==0.9.2` requires
@@ -60,7 +60,7 @@ import vllm; print('vllm', vllm.__version__)"
 
 Two environments exist in the `Ubuntu-22.04` distro from this session:
 `~/vllmenv` (vLLM 0.29.0 + FlashInfer 0.6.18, **cu130, unusable here**) and
-`~/vllm126` (the cu126 rebuild — **verified working**: torch 2.7.0+cu126,
+`~/vllm126` (the cu126 rebuild - **verified working**: torch 2.7.0+cu126,
 `torch.cuda.is_available()` True, a real matmul completes, vLLM 0.9.2 imports,
 and both `vllm.vllm_flash_attn` and `vllm._custom_ops.paged_attention_v1` load).
 
@@ -73,7 +73,7 @@ Pinning the heavy transitive packages explicitly makes it resolve immediately:
     vllm==0.9.2 torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 xformers==0.0.30
 ```
 
-### Triton needs a host C compiler — and you can get one without root
+### Triton needs a host C compiler - and you can get one without root
 
 This WSL image has **no `gcc`**, and Triton JITs its runtime shim through one:
 
@@ -136,15 +136,15 @@ classmethod to return ours.
 `PagedAttnTritonBackend` **subclasses vLLM's own `TritonAttentionBackend`** and
 overrides only `get_impl_cls`; `PagedAttnTritonImpl` subclasses
 `TritonAttentionImpl` and overrides only `forward`. Building V1 attention
-metadata correctly — `query_start_loc`, `slot_mapping`, block tables, cascade and
-local-attention variants, the CUDA-graph capture paths — is the fiddly,
+metadata correctly - `query_start_loc`, `slot_mapping`, block tables, cascade and
+local-attention variants, the CUDA-graph capture paths - is the fiddly,
 version-sensitive part. Inheriting it is both less code and fewer ways to be
 subtly wrong.
 
 `forward` intercepts **pure decode** (`max_query_len == 1`) and hands everything
 else back to `super().forward()`: prefill, mixed prefill+decode batches, fp8 KV
 caches, sliding-window and ALiBi layers, soft-capped logits. That is the design,
-not a gap — our kernel is a single-query decode kernel with no causal mask across
+not a gap - our kernel is a single-query decode kernel with no causal mask across
 a query tile and no positional-bias support, and pretending otherwise would
 produce wrong numbers instead of an error.
 
@@ -157,7 +157,7 @@ matching this layout in `pagedattn/cache.py`.
 
 The V1 engine runs in a **child process** by default, where an in-process
 monkeypatch never applies. `bench_vllm.py` sets
-`VLLM_ENABLE_V1_MULTIPROCESSING=0` for *both* backends — running the baseline the
+`VLLM_ENABLE_V1_MULTIPROCESSING=0` for *both* backends - running the baseline the
 same way is the difference between a comparison and a confound, and it moved the
 baseline TPOT materially. For production use, register `install()`
 through a `vllm.general_plugins` entry point instead; that runs in the worker.
@@ -178,7 +178,7 @@ The weights, the CUDA context (~300 MiB) and the KV pool all share 4 GiB.
 
 | model | q/kv heads | head_dim | group | fp16 weights | fits? |
 |---|---|---|---:|---|---|
-| Qwen2.5-0.5B | 14 / 2 | 64 | 7 | ~1.0 GiB | yes — **used for section 6.1** |
+| Qwen2.5-0.5B | 14 / 2 | 64 | 7 | ~1.0 GiB | yes - **used for section 6.1** |
 | Llama-3.2-1B | 32 / 8 | 64 | 4 | ~2.5 GiB | yes, gated |
 | Qwen2.5-1.5B | 12 / 2 | 128 | 6 | ~3.1 GiB | tight |
 | Llama-3-8B | 32 / 8 | 128 | 4 | ~16 GiB | no |
@@ -201,7 +201,7 @@ PYTHONPATH=$PWD ~/vllm126/bin/python integration/bench_vllm.py     --model Qwen/
 ```
 
 Both append to `results/vllm_e2e.json`. **Run them in alternating order and pair
-them up** — this machine has sporadic multi-second stalls, and a single A-then-B
+them up** - this machine has sporadic multi-second stalls, and a single A-then-B
 comparison on it is worth nothing. The 12 pairs behind README section 6.1 were
 collected 7 one way and 5 the other so run-order bias cancels; two *baseline*
 runs still landed at 91 ms and 97 ms against a 15 ms median.
@@ -214,7 +214,7 @@ ends with the call counters:
 
 `bench_vllm.py` **raises if `decode_calls == 0`.** A backend that silently falls
 back is the single most likely failure here and it produces a completely
-plausible table — of vLLM's kernel, not ours.
+plausible table - of vLLM's kernel, not ours.
 
 TPOT is computed two-point, `(wall(N) - wall(1)) / (N - 1)`, because vLLM V1 does
 not populate `RequestOutput.metrics`. That yields one number per run, so p90/p99

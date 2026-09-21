@@ -1,0 +1,36 @@
+torch.profiler -- Qwen/Qwen2.5-0.5B-Instruct
+backend: vllm-default
+requests: 24  output_tokens: 96
+device: NVIDIA GeForce RTX 3050 Laptop GPU  torch 2.7.0+cu126
+
+----------------------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                                  Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls  
+----------------------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                              aten::mm         0.62%       7.423ms        30.45%     366.077ms       2.179ms     430.915ms        36.82%     436.199ms       2.596ms           168  
+void cutlass::Kernel2<cutlass_80_tensorop_f16_s16816gemm_relu_f16_1...         0.00%       0.000us         0.00%       0.000us       0.000us     265.326ms        22.67%     265.326ms       5.528ms            48  
+void cutlass::Kernel2<cutlass_80_tensorop_f16_s16816gemm_relu_f16_1...         0.00%       0.000us         0.00%       0.000us       0.000us     259.218ms        22.15%     259.218ms     113.692us          2280  
+sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize32x32x64_stage6_warps...         0.00%       0.000us         0.00%       0.000us       0.000us     149.344ms        12.76%     149.344ms       1.556ms            96  
+                                               _vllm_fa2_C::varlen_fwd         3.27%      39.345ms        19.55%     235.026ms     102.008us     144.376ms        12.33%     161.751ms      70.205us          2304  
+void cutlass::Kernel2<cutlass_80_tensorop_f16_s16816gemm_relu_f16_6...         0.00%       0.000us         0.00%       0.000us       0.000us     126.152ms        10.78%     126.152ms      55.330us          2280  
+void flash::flash_fwd_splitkv_kernel<Flash_fwd_kernel_traits<64, 64...         0.00%       0.000us         0.00%       0.000us       0.000us     118.648ms        10.14%     118.648ms      52.039us          2280  
+void cutlass::Kernel2<cutlass_80_tensorop_f16_s16816gemm_relu_f16_6...         0.00%       0.000us         0.00%       0.000us       0.000us      40.123ms         3.43%      40.123ms      17.598us          2280  
+                                                           aten::copy_         3.92%      47.096ms        32.42%     389.734ms      49.934us      31.039ms         2.65%      31.048ms       3.978us          7805  
+                                           triton_poi_fused_mul_silu_1         0.00%       0.000us         0.00%       0.000us       0.000us      30.134ms         2.57%      30.134ms      13.079us          2304  
+ampere_fp16_s16816gemm_fp16_64x64_sliced1x2_ldg8_f2f_stages_64x5_tn...         0.00%       0.000us         0.00%       0.000us       0.000us      29.578ms         2.53%      29.578ms      12.973us          2280  
+void flash::flash_fwd_splitkv_kernel<Flash_fwd_kernel_traits<64, 64...         0.00%       0.000us         0.00%       0.000us       0.000us      25.728ms         2.20%      25.728ms       1.072ms            24  
+                                                           aten::addmm         0.08%     931.855us         0.11%       1.320ms      55.009us      24.235ms         2.07%      24.235ms       1.010ms            24  
+      ampere_fp16_s16816gemm_fp16_256x128_ldg8_relu_f2f_stages_32x3_tn         0.00%       0.000us         0.00%       0.000us       0.000us      24.235ms         2.07%      24.235ms       1.010ms            24  
+                                           triton_poi_fused_mul_silu_1         0.01%     176.069us         0.03%     369.824us      15.409us      21.842ms         1.87%      21.842ms     910.087us            24  
+                        ampere_fp16_s1688gemm_fp16_128x128_ldg8_f2f_tn         0.00%       0.000us         0.00%       0.000us       0.000us      16.226ms         1.39%      16.226ms     676.064us            24  
+void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_...         0.00%       0.000us         0.00%       0.000us       0.000us      13.120ms         1.12%      13.120ms       2.877us          4560  
+void at::native::unrolled_elementwise_kernel<at::native::direct_cop...         0.00%       0.000us         0.00%       0.000us       0.000us      12.983ms         1.11%      12.983ms     135.243us            96  
+                    triton_per_fused__to_copy_add_mean_mul_pow_rsqrt_2         0.00%       0.000us         0.00%       0.000us       0.000us      11.378ms         0.97%      11.378ms       4.938us          2304  
+                                                          aten::argmax         0.18%       2.170ms         0.37%       4.443ms      46.276us       8.776ms         0.75%       8.776ms      91.415us            96  
+void at::native::reduce_kernel<512, 1, at::native::ReduceOp<float, ...         0.00%       0.000us         0.00%       0.000us       0.000us       8.746ms         0.75%       8.746ms      91.104us            96  
+                    triton_per_fused__to_copy_add_mean_mul_pow_rsqrt_0         0.00%       0.000us         0.00%       0.000us       0.000us       7.944ms         0.68%       7.944ms       3.448us          2304  
+void cublasLt::splitKreduce_kernel<32, 16, int, __half, __half, flo...         0.00%       0.000us         0.00%       0.000us       0.000us       6.993ms         0.60%       6.993ms       3.067us          2280  
+                    triton_per_fused__to_copy_add_mean_mul_pow_rsqrt_2         0.02%     269.727us         0.04%     461.339us      19.222us       6.721ms         0.57%       6.721ms     280.032us            24  
+                                                triton_poi_fused_cat_3         0.00%       0.000us         0.00%       0.000us       0.000us       6.502ms         0.56%       6.502ms       2.945us          2208  
+----------------------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 1.202s
+Self CUDA time total: 1.170s

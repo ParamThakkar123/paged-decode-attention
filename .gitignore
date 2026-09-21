@@ -4,10 +4,12 @@ __pycache__/
 .pytest_cache/
 .benchmarks/
 
-# Profiler captures are large (16 MB) and only open in the Nsight GUI. The
-# committed .txt / .csv exports next to them, plus results/NCU.md, carry every
-# number the README quotes; regenerate the captures with profiling/run_ncu.ps1
-# and run_nsys.ps1 if you want the interactive views.
-*.ncu-rep
-*.nsys-rep
-*.sqlite
+# `decode-ours.json` (37 MB) is committed on purpose: it is the profiler
+# artifact behind the section 4.2 numbers, and it opens in chrome://tracing or
+# Perfetto so the kernel timings can be re-derived independently.
+#
+# The matching vLLM-default trace is 73 MB and is NOT committed -- two traces
+# would put 110 MB of binary in the history permanently. Its `.txt` table is
+# committed instead and carries every number the README quotes; regenerate the
+# trace with `bench_vllm.py --profile results/profile`.
+results/profile/decode-vllm-default.json
